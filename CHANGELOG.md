@@ -6,15 +6,26 @@ The format is based on Keep a Changelog, and this project intends to follow Sema
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-11
+
 ### Added
 
+- cyberpunk UI theme assets and shared global styling primitives
 - GitHub publishing documentation and release workflows
 - Apache-2.0 license metadata and repository health files
 
 ### Changed
 
+- redesigned Dashboard, Today, Calendar, Ledger, and Settings with the new sidebar-first UI
+- enforced a minimum desktop window size so the refactored layout stays usable while resizing
 - README rewritten for public GitHub distribution
 - release policy formalized around semantic version tags and GitHub Releases
+
+### Fixed
+
+- calendar today badge no longer implies a record already exists
+- out-of-month calendar cells no longer present themselves as interactive
+- removed release-noisy import error logging from Settings
 
 ## [0.1.0] - 2026-06-11
 

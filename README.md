@@ -92,8 +92,8 @@ Standard outputs:
 
 ```text
 src-tauri\target\release\pgrn.exe
-src-tauri\target\release\bundle\nsis\Personal Growth RPG Notebook_0.1.0_x64-setup.exe
-src-tauri\target\release\bundle\msi\Personal Growth RPG Notebook_0.1.0_x64_en-US.msi
+src-tauri\target\release\bundle\nsis\Personal Growth RPG Notebook_0.2.0_x64-setup.exe
+src-tauri\target\release\bundle\msi\Personal Growth RPG Notebook_0.2.0_x64_en-US.msi
 ```
 
 Run the built release:

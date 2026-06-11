@@ -1,0 +1,472 @@
+/* ============================================
+   Cyberpunk RPG Theme - Global Styles
+   ============================================ */
+
+:root {
+  /* Core Palette */
+  --cyber-bg-deep: #03050a;
+  --cyber-bg-base: #0a0f1e;
+  --cyber-bg-panel: rgba(10, 18, 40, 0.92);
+  --cyber-bg-panel-solid: #0a1228;
+  --cyber-bg-input: #0d1528;
+  --cyber-bg-hover: rgba(0, 180, 255, 0.08);
+
+  /* Neon Accents */
+  --cyber-cyan: #00d4ff;
+  --cyber-blue: #0099ff;
+  --cyber-blue-dim: #0066cc;
+  --cyber-glow: rgba(0, 212, 255, 0.4);
+  --cyber-glow-strong: rgba(0, 212, 255, 0.7);
+
+  /* Text Colors */
+  --cyber-text-primary: #ffffff;
+  --cyber-text-secondary: #a0c4e8;
+  --cyber-text-muted: #5a7a9a;
+  --cyber-text-dim: #3a5068;
+
+  /* Semantic */
+  --cyber-success: #00ffaa;
+  --cyber-warning: #ffcc00;
+  --cyber-danger: #ff3366;
+  --cyber-info: #00d4ff;
+
+  /* Borders */
+  --cyber-border: rgba(0, 180, 255, 0.25);
+  --cyber-border-hover: rgba(0, 212, 255, 0.5);
+  --cyber-border-glow: 0 0 8px rgba(0, 212, 255, 0.3), inset 0 0 8px rgba(0, 212, 255, 0.05);
+
+  /* Typography */
+  --cyber-font-display: 'Inter', 'Segoe UI', 'PingFang SC', sans-serif;
+  --cyber-font-mono: 'Consolas', 'Monaco', monospace;
+}
+
+/* Global Reset & Base */
+html, body, #app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: var(--cyber-font-display);
+  background: var(--cyber-bg-deep);
+  color: var(--cyber-text-primary);
+  overflow: hidden;
+}
+
+/* Background is handled by App.vue bg-layer with background.png */
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--cyber-bg-base);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--cyber-blue-dim);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--cyber-blue);
+}
+
+/* Selection */
+::selection {
+  background: rgba(0, 212, 255, 0.3);
+  color: #fff;
+}
+
+/* ============================================
+   Naive UI Global Overrides
+   ============================================ */
+
+/* Modal / Card / Dialog backgrounds */
+.n-modal,
+.n-card {
+  background: var(--cyber-bg-panel-solid) !important;
+  border: 1px solid var(--cyber-border) !important;
+  color: var(--cyber-text-primary) !important;
+}
+
+.n-card-header__main {
+  color: var(--cyber-text-primary) !important;
+}
+
+/* Buttons */
+.n-button {
+  --n-text-color: var(--cyber-text-primary) !important;
+  --n-border: 1px solid var(--cyber-border) !important;
+}
+
+.n-button--primary-type {
+  background: linear-gradient(135deg, var(--cyber-blue-dim), var(--cyber-blue)) !important;
+  border-color: var(--cyber-cyan) !important;
+  box-shadow: 0 0 12px rgba(0, 180, 255, 0.25) !important;
+}
+
+.n-button--primary-type:hover {
+  box-shadow: 0 0 16px rgba(0, 212, 255, 0.4) !important;
+}
+
+.n-button--default-type {
+  background: rgba(0, 60, 120, 0.2) !important;
+  border-color: var(--cyber-border) !important;
+}
+
+.n-button--default-type:hover {
+  border-color: var(--cyber-border-hover) !important;
+  background: rgba(0, 180, 255, 0.1) !important;
+}
+
+.n-button--error-type {
+  background: rgba(255, 51, 102, 0.15) !important;
+  border-color: var(--cyber-danger) !important;
+  color: var(--cyber-danger) !important;
+}
+
+/* Inputs */
+.n-input {
+  --n-color: var(--cyber-bg-input) !important;
+  --n-color-focus: var(--cyber-bg-input) !important;
+  --n-border: 1px solid var(--cyber-border) !important;
+  --n-border-focus: 1px solid var(--cyber-cyan) !important;
+  --n-text-color: var(--cyber-text-primary) !important;
+  --n-placeholder-color: var(--cyber-text-dim) !important;
+  --n-box-shadow-focus: 0 0 0 2px rgba(0, 212, 255, 0.15) !important;
+}
+
+.n-input-number {
+  --n-color: var(--cyber-bg-input) !important;
+}
+
+/* Form */
+.n-form-item-label {
+  color: var(--cyber-text-secondary) !important;
+}
+
+/* Rate */
+.n-rate {
+  --n-item-color: rgba(0, 212, 255, 0.2) !important;
+}
+
+/* Progress */
+.n-progress {
+  --n-fill-color: var(--cyber-cyan) !important;
+  --n-rail-color: rgba(0, 60, 120, 0.3) !important;
+}
+
+/* Tag */
+.n-tag {
+  --n-color: rgba(0, 80, 160, 0.2) !important;
+  --n-border: 1px solid var(--cyber-border) !important;
+  --n-text-color: var(--cyber-cyan) !important;
+}
+
+.n-tag--success-type {
+  --n-color: rgba(0, 255, 170, 0.1) !important;
+  --n-border: 1px solid var(--cyber-success) !important;
+  --n-text-color: var(--cyber-success) !important;
+}
+
+.n-tag--error-type {
+  --n-color: rgba(255, 51, 102, 0.1) !important;
+  --n-border: 1px solid var(--cyber-danger) !important;
+  --n-text-color: var(--cyber-danger) !important;
+}
+
+.n-tag--warning-type {
+  --n-color: rgba(255, 204, 0, 0.1) !important;
+  --n-border: 1px solid var(--cyber-warning) !important;
+  --n-text-color: var(--cyber-warning) !important;
+}
+
+/* Alert */
+.n-alert {
+  --n-color: rgba(0, 60, 120, 0.15) !important;
+  --n-border: 1px solid var(--cyber-border) !important;
+}
+
+.n-alert--error-type {
+  --n-color: rgba(255, 51, 102, 0.08) !important;
+  --n-border: 1px solid rgba(255, 51, 102, 0.3) !important;
+}
+
+/* Table */
+.n-data-table {
+  --n-th-color: rgba(0, 40, 80, 0.5) !important;
+  --n-td-color: transparent !important;
+  --n-th-text-color: var(--cyber-text-secondary) !important;
+  --n-td-text-color: var(--cyber-text-primary) !important;
+  --n-border-color: var(--cyber-border) !important;
+}
+
+/* Menu (sidebar fallback) */
+.n-menu {
+  --n-item-text-color: var(--cyber-text-muted) !important;
+  --n-item-text-color-hover: var(--cyber-text-secondary) !important;
+  --n-item-text-color-active: var(--cyber-cyan) !important;
+  --n-item-color-active: rgba(0, 180, 255, 0.1) !important;
+  --n-item-color-active-hover: rgba(0, 180, 255, 0.15) !important;
+}
+
+/* Empty */
+.n-empty {
+  --n-text-color: var(--cyber-text-muted) !important;
+}
+
+/* Space / Layout */
+.n-layout {
+  background: transparent !important;
+}
+
+.n-layout-sider {
+  background: var(--cyber-bg-panel-solid) !important;
+  border-right: 1px solid var(--cyber-border) !important;
+}
+
+/* ============================================
+   Cyberpunk Utility Classes
+   ============================================ */
+
+.cyber-page {
+  position: relative;
+  z-index: 1;
+  padding: 24px 32px;
+  height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.cyber-page-title {
+  font-size: 42px;
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--cyber-text-primary);
+  margin: 0 0 24px 0;
+  line-height: 1.1;
+  text-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
+}
+
+.cyber-page-title .sub {
+  font-size: 18px;
+  font-weight: 500;
+  font-style: normal;
+  letter-spacing: 4px;
+  color: var(--cyber-cyan);
+  margin-left: 12px;
+  text-shadow: none;
+}
+
+.cyber-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--cyber-cyan);
+  margin-bottom: 16px;
+  padding: 4px 16px;
+  background: linear-gradient(90deg, rgba(0, 212, 255, 0.15), transparent);
+  border-left: 3px solid var(--cyber-cyan);
+}
+
+.cyber-section-title .sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--cyber-text-muted);
+  text-transform: none;
+  letter-spacing: 2px;
+}
+
+.cyber-glow-text {
+  color: var(--cyber-cyan);
+  text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+}
+
+.cyber-stat-value {
+  font-size: 36px;
+  font-weight: 900;
+  font-style: italic;
+  color: var(--cyber-text-primary);
+  line-height: 1;
+}
+
+.cyber-stat-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--cyber-text-muted);
+  margin-bottom: 4px;
+}
+
+.cyber-stat-sublabel {
+  font-size: 11px;
+  color: var(--cyber-text-dim);
+  letter-spacing: 1px;
+}
+
+/* Panel Base (used by CyberPanel and inline) */
+.cyber-panel {
+  background: var(--cyber-bg-panel);
+  border: 1px solid var(--cyber-border);
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.cyber-panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--cyber-cyan), transparent);
+  opacity: 0.6;
+}
+
+.cyber-panel:hover {
+  border-color: var(--cyber-border-hover);
+  box-shadow: var(--cyber-border-glow);
+}
+
+/* Clip-path angled corners variant */
+.cyber-panel-angled {
+  clip-path: polygon(
+    0 8px, 8px 0,
+    calc(100% - 8px) 0, 100% 8px,
+    100% calc(100% - 8px), calc(100% - 8px) 100%,
+    8px 100%, 0 calc(100% - 8px)
+  );
+}
+
+/* Progress bar cyber style */
+.cyber-progress-track {
+  height: 8px;
+  background: rgba(0, 40, 80, 0.4);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.cyber-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--cyber-blue-dim), var(--cyber-cyan));
+  border-radius: 4px;
+  transition: width 0.5s ease;
+  box-shadow: 0 0 8px rgba(0, 212, 255, 0.3);
+}
+
+/* Badge / Achievement card */
+.cyber-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: rgba(0, 80, 160, 0.15);
+  border: 1px solid var(--cyber-border);
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--cyber-text-secondary);
+  transition: all 0.2s;
+}
+
+.cyber-badge.unlocked {
+  background: rgba(0, 212, 255, 0.1);
+  border-color: var(--cyber-cyan);
+  color: var(--cyber-text-primary);
+  box-shadow: 0 0 8px rgba(0, 212, 255, 0.1);
+}
+
+.cyber-badge.locked {
+  opacity: 0.4;
+  filter: grayscale(0.6);
+}
+
+/* Task item card */
+.cyber-task-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  background: rgba(0, 20, 50, 0.4);
+  border: 1px solid var(--cyber-border);
+  border-left: 3px solid var(--cyber-cyan);
+  border-radius: 0 4px 4px 0;
+  margin-bottom: 8px;
+  transition: all 0.2s;
+}
+
+.cyber-task-item:hover {
+  background: rgba(0, 40, 80, 0.3);
+  border-color: var(--cyber-border-hover);
+}
+
+/* Calendar cell */
+.cyber-cal-cell {
+  aspect-ratio: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 15, 35, 0.6);
+  border: 1px solid rgba(0, 60, 120, 0.2);
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.cyber-cal-cell:hover {
+  border-color: var(--cyber-border);
+  background: rgba(0, 40, 80, 0.3);
+}
+
+.cyber-cal-cell.today {
+  border-color: var(--cyber-cyan);
+  background: rgba(0, 180, 255, 0.1);
+  box-shadow: inset 0 0 12px rgba(0, 212, 255, 0.1);
+}
+
+.cyber-cal-cell.has-record::after {
+  content: '';
+  position: absolute;
+  bottom: 6px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--cyber-cyan);
+  box-shadow: 0 0 4px var(--cyber-cyan);
+}
+
+.cyber-cal-cell.other-month {
+  opacity: 0.3;
+}
+
+/* Ledger entry card */
+.cyber-ledger-card {
+  padding: 16px 20px;
+  background: rgba(0, 15, 40, 0.5);
+  border: 1px solid var(--cyber-border);
+  border-radius: 4px;
+  margin-bottom: 10px;
+  transition: all 0.2s;
+}
+
+.cyber-ledger-card:hover {
+  border-color: var(--cyber-border-hover);
+  background: rgba(0, 30, 60, 0.4);
+}
+
+/* Modal styling enhancement */
+.cyber-modal .n-card {
+  background: var(--cyber-bg-panel-solid) !important;
+  border: 1px solid var(--cyber-border) !important;
+}
+
+.cyber-modal .n-card-header {
+  border-bottom: 1px solid var(--cyber-border) !important;
+}
