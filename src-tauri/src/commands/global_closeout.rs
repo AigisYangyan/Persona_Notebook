@@ -1,6 +1,9 @@
 use crate::commands::{api_proxy, daily_insight, plan, score};
 use crate::db::connection::{AppDataDirState, DbState};
-use crate::db::repositories::{daily_review_repo, dimension_repo, ledger_repo, record_repo, rule_repo};
+use crate::db::repositories::{
+    daily_review_repo, dimension_repo, ledger_repo, record_repo, rule_repo,
+};
+use crate::services::ai_response_service;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -78,7 +81,15 @@ pub async fn run_global_closeout(
 
     let closeout_run_id = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        insert_closeout_run(&conn, &date, &scope, &score_step, &report_step, &week_step, &month_step)?
+        insert_closeout_run(
+            &conn,
+            &date,
+            &scope,
+            &score_step,
+            &report_step,
+            &week_step,
+            &month_step,
+        )?
     };
 
     Ok(GlobalCloseoutResultDto {
@@ -137,7 +148,7 @@ fn pause_running_timers(state: &State<'_, DbState>) -> Result<(), String> {
 }
 
 async fn run_score_step(state: &State<'_, DbState>, date: &str) -> CloseoutStepDto {
-    let (records, request_json) = {
+    let (records, rule_preview, request_json) = {
         let conn = match state.0.lock() {
             Ok(conn) => conn,
             Err(error) => return error_step(error.to_string()),
@@ -166,22 +177,61 @@ async fn run_score_step(state: &State<'_, DbState>, date: &str) -> CloseoutStepD
             Err(error) => return error_step(error),
         };
 
-        let request_json = match build_daily_analysis_request_json(&conn, date, &records, &rule_preview) {
-            Ok(value) => value,
-            Err(error) => return error_step(error),
-        };
+        let request_json =
+            match build_daily_analysis_request_json(&conn, date, &records, &rule_preview) {
+                Ok(value) => value,
+                Err(error) => return error_step(error),
+            };
 
-        (records, request_json)
+        (records, rule_preview, request_json)
     };
 
     let raw_response = match api_proxy::call_scoring_api(state.clone(), request_json).await {
         Ok(response) => response,
-        Err(error) => return error_step(error),
+        Err(error) => {
+            let fallback_summary =
+                format!("AI 评分请求失败，已自动回退到本地规则缓存。原始问题：{error}");
+            let conn = match state.0.lock() {
+                Ok(conn) => conn,
+                Err(lock_error) => return error_step(lock_error.to_string()),
+            };
+
+            return match confirm_score_items(
+                &conn,
+                date,
+                rule_preview,
+                Some(fallback_summary.as_str()),
+            ) {
+                Ok(()) => success_step("今日成长点数已更新（AI 请求失败，已自动回退到本地规则）"),
+                Err(confirm_error) => error_step(format!(
+                    "评分请求失败，且本地回退写入失败：{confirm_error}（原始错误：{error}）"
+                )),
+            };
+        }
     };
 
-    let parsed: ScoreApiResponse = match serde_json::from_str(&raw_response) {
+    let parsed: ScoreApiResponse = match parse_score_api_response(&raw_response) {
         Ok(parsed) => parsed,
-        Err(error) => return error_step(format!("评分响应解析失败: {error}")),
+        Err(error) => {
+            let fallback_summary =
+                format!("AI 评分响应异常，已自动回退到本地规则缓存。原始问题：{error}");
+            let conn = match state.0.lock() {
+                Ok(conn) => conn,
+                Err(lock_error) => return error_step(lock_error.to_string()),
+            };
+
+            return match confirm_score_items(
+                &conn,
+                date,
+                rule_preview,
+                Some(fallback_summary.as_str()),
+            ) {
+                Ok(()) => success_step("今日成长点数已更新（AI 评分异常，已自动回退到本地规则）"),
+                Err(confirm_error) => error_step(format!(
+                    "评分响应解析失败，且本地回退写入失败：{confirm_error}（原始错误：{error}）"
+                )),
+            };
+        }
     };
 
     let items = parsed
@@ -246,7 +296,9 @@ async fn run_plan_step(
     date: &str,
     period_type: &str,
 ) -> CloseoutStepDto {
-    match plan::refresh_plan_progress(state.clone(), period_type.to_string(), date.to_string()).await {
+    match plan::refresh_plan_progress(state.clone(), period_type.to_string(), date.to_string())
+        .await
+    {
         Ok(outcome) if outcome.requires_clarification => CloseoutStepDto {
             status: "needs_clarification".into(),
             message: format!("{period_type} plan 需要补充回答"),
@@ -558,5 +610,34 @@ fn error_step<E: ToString>(error: E) -> CloseoutStepDto {
         report_id: None,
         session_id: None,
         questions: Vec::new(),
+    }
+}
+
+fn parse_score_api_response(raw_response: &str) -> Result<ScoreApiResponse, String> {
+    ai_response_service::parse_ai_json(raw_response, "scoring api")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_score_api_response_rejects_empty_content() {
+        let result = parse_score_api_response("   ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_score_api_response_strips_code_fences() {
+        let payload = r#"```json
+{
+  "summary": "ok",
+  "record_results": []
+}
+```"#;
+
+        let parsed = parse_score_api_response(payload).expect("should parse fenced json");
+        assert_eq!(parsed.summary, "ok");
+        assert!(parsed.record_results.is_empty());
     }
 }

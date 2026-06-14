@@ -3,6 +3,7 @@ use crate::models::personal_memory::{
     PersonalMemoryPatchApplyResult, PersonalMemoryPatchOperation, PersonalMemorySource,
     PersonalMemoryViewItem, PersonalProfile,
 };
+use crate::services::ai_response_service;
 use chrono::{Duration, Local, NaiveDate};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::json;
@@ -78,14 +79,8 @@ pub fn get_personal_memory_overview(conn: &Connection) -> Result<PersonalMemoryO
     let items = list_memory_items(conn)?;
     let sources = list_memory_sources(conn)?;
     let total_items = items.len() as i32;
-    let active_items = items
-        .iter()
-        .filter(|item| item.status == "active")
-        .count() as i32;
-    let pending_items = items
-        .iter()
-        .filter(|item| item.status == "pending")
-        .count() as i32;
+    let active_items = items.iter().filter(|item| item.status == "active").count() as i32;
+    let pending_items = items.iter().filter(|item| item.status == "pending").count() as i32;
     let rejected_items = items
         .iter()
         .filter(|item| item.status == "rejected")
@@ -140,14 +135,15 @@ pub fn search_personal_memory(
                 item.title.to_lowercase().contains(needle)
                     || item.summary.to_lowercase().contains(needle)
                     || item.detail.to_lowercase().contains(needle)
-                    || item.tags.iter().any(|tag| tag.to_lowercase().contains(needle))
+                    || item
+                        .tags
+                        .iter()
+                        .any(|tag| tag.to_lowercase().contains(needle))
             });
             let tags_match = tag_filters.is_empty()
-                || tag_filters.iter().all(|needle| {
-                    item.tags
-                        .iter()
-                        .any(|tag| tag.to_lowercase() == *needle)
-                });
+                || tag_filters
+                    .iter()
+                    .all(|needle| item.tags.iter().any(|tag| tag.to_lowercase() == *needle));
             query_matches && tags_match
         })
         .collect::<Vec<_>>();
@@ -172,7 +168,11 @@ pub fn build_personal_context_pack(
     let all_items = list_active_memory_items(conn)?;
 
     let mut high_priority_memories = all_items.clone();
-    high_priority_memories.sort_by(|a, b| b.importance.cmp(&a.importance).then_with(|| b.last_seen_date.cmp(&a.last_seen_date)));
+    high_priority_memories.sort_by(|a, b| {
+        b.importance
+            .cmp(&a.importance)
+            .then_with(|| b.last_seen_date.cmp(&a.last_seen_date))
+    });
     high_priority_memories.truncate(20);
 
     let recent_threshold = NaiveDate::parse_from_str(date, "%Y-%m-%d")
@@ -189,16 +189,30 @@ pub fn build_personal_context_pack(
         })
         .cloned()
         .collect::<Vec<_>>();
-    recent_memories.sort_by(|a, b| b.last_seen_date.cmp(&a.last_seen_date).then_with(|| b.importance.cmp(&a.importance)));
+    recent_memories.sort_by(|a, b| {
+        b.last_seen_date
+            .cmp(&a.last_seen_date)
+            .then_with(|| b.importance.cmp(&a.importance))
+    });
     recent_memories.truncate(20);
 
-    let relevant_types = ["habit", "recurring_pattern", "relationship", "goal_context", "caution"];
+    let relevant_types = [
+        "habit",
+        "recurring_pattern",
+        "relationship",
+        "goal_context",
+        "caution",
+    ];
     let mut relevant_memories = all_items
         .iter()
         .filter(|item| relevant_types.contains(&item.memory_type.as_str()))
         .cloned()
         .collect::<Vec<_>>();
-    relevant_memories.sort_by(|a, b| b.importance.cmp(&a.importance).then_with(|| b.last_seen_date.cmp(&a.last_seen_date)));
+    relevant_memories.sort_by(|a, b| {
+        b.importance
+            .cmp(&a.importance)
+            .then_with(|| b.last_seen_date.cmp(&a.last_seen_date))
+    });
     relevant_memories.truncate(20);
 
     Ok(PersonalContextPack {
@@ -220,23 +234,23 @@ pub fn apply_memory_patch(
     source_context_id: &str,
 ) -> Result<PersonalMemoryPatchApplyResult, String> {
     let patch_run_id = create_patch_run(conn, source_context_id, patch_json)?;
-    let patch: PersonalMemoryPatch = serde_json::from_str(patch_json)
+    let patch: PersonalMemoryPatch = ai_response_service::parse_ai_json(patch_json, "memory patch")
         .map_err(|e| {
-            let _ = finalize_patch_run(
-                conn,
-                patch_run_id,
-                "rejected",
-                "rejected",
-                0,
-                1,
-                Some(&format!("invalid patch json: {e}")),
-            );
-            format!("invalid patch json: {e}")
+            let _ = finalize_patch_run(conn, patch_run_id, "rejected", "rejected", 0, 1, Some(&e));
+            e
         })?;
 
     if patch.schema_version.trim() != "1.0" {
         let message = format!("unsupported patch schema version: {}", patch.schema_version);
-        finalize_patch_run(conn, patch_run_id, "rejected", "rejected", 0, 1, Some(&message))?;
+        finalize_patch_run(
+            conn,
+            patch_run_id,
+            "rejected",
+            "rejected",
+            0,
+            1,
+            Some(&message),
+        )?;
         return Err(message);
     }
 
@@ -322,7 +336,11 @@ fn apply_profile_updates(
     conn: &Connection,
     updates: &crate::models::personal_memory::PersonalProfilePatch,
 ) -> Result<bool, String> {
-    if updates.birthday.as_deref().is_some_and(|value| !value.trim().is_empty()) {
+    if updates
+        .birthday
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
         return Err("AI patch cannot overwrite birthday".into());
     }
 
@@ -331,7 +349,8 @@ fn apply_profile_updates(
 
     profile.personality = merge_profile_text(&profile.personality, updates.personality.as_deref());
     profile.experiences = merge_profile_text(&profile.experiences, updates.experiences.as_deref());
-    profile.personal_notes = merge_profile_text(&profile.personal_notes, updates.personal_notes.as_deref());
+    profile.personal_notes =
+        merge_profile_text(&profile.personal_notes, updates.personal_notes.as_deref());
 
     let after = serde_json::to_string(&profile).map_err(|e| e.to_string())?;
     if before == after {
@@ -380,8 +399,14 @@ fn apply_create_operation(
 
     if let Some(existing) = find_active_memory_by_title(conn, &normalized_title, memory_type)? {
         attach_sources(conn, existing.id, &operation.sources)?;
-        let confidence = operation.confidence.unwrap_or(existing.confidence).max(existing.confidence);
-        let importance = operation.importance.unwrap_or(existing.importance).max(existing.importance);
+        let confidence = operation
+            .confidence
+            .unwrap_or(existing.confidence)
+            .max(existing.confidence);
+        let importance = operation
+            .importance
+            .unwrap_or(existing.importance)
+            .max(existing.importance);
         let last_seen_date = operation
             .last_seen_date
             .as_deref()
@@ -401,7 +426,11 @@ fn apply_create_operation(
             confidence,
             existing.first_seen_date.as_deref(),
             last_seen_date.as_deref(),
-            if confidence < 0.35 { "pending" } else { "active" },
+            if confidence < 0.35 {
+                "pending"
+            } else {
+                "active"
+            },
             existing.supersedes_id,
             &existing.created_by,
         )?;
@@ -475,8 +504,15 @@ fn apply_update_operation(
         operation.title.as_deref().unwrap_or(&existing.title),
         operation.summary.as_deref().unwrap_or(&existing.summary),
         operation.detail.as_deref().unwrap_or(&existing.detail),
-        if operation.tags.is_empty() { &existing_tags } else { &operation.tags },
-        operation.importance.unwrap_or(existing.importance).clamp(0, 100),
+        if operation.tags.is_empty() {
+            &existing_tags
+        } else {
+            &operation.tags
+        },
+        operation
+            .importance
+            .unwrap_or(existing.importance)
+            .clamp(0, 100),
         operation
             .confidence
             .unwrap_or(existing.confidence)
@@ -520,9 +556,19 @@ fn apply_reinforce_operation(
     let existing_tags = parse_tags(&existing.tags_json);
 
     attach_sources(conn, target_id, &operation.sources)?;
-    let importance = operation.importance.unwrap_or(existing.importance).max(existing.importance);
-    let confidence = operation.confidence.unwrap_or(existing.confidence).max(existing.confidence);
-    let status = if confidence < 0.35 { "pending" } else { "active" };
+    let importance = operation
+        .importance
+        .unwrap_or(existing.importance)
+        .max(existing.importance);
+    let confidence = operation
+        .confidence
+        .unwrap_or(existing.confidence)
+        .max(existing.confidence);
+    let status = if confidence < 0.35 {
+        "pending"
+    } else {
+        "active"
+    };
 
     update_memory_row(
         conn,
@@ -531,7 +577,11 @@ fn apply_reinforce_operation(
         &existing.title,
         operation.summary.as_deref().unwrap_or(&existing.summary),
         operation.detail.as_deref().unwrap_or(&existing.detail),
-        if operation.tags.is_empty() { &existing_tags } else { &operation.tags },
+        if operation.tags.is_empty() {
+            &existing_tags
+        } else {
+            &operation.tags
+        },
         importance,
         confidence,
         existing.first_seen_date.as_deref(),
@@ -578,8 +628,15 @@ fn apply_supersede_operation(
         title,
         summary,
         operation.detail.as_deref().unwrap_or(&existing.detail),
-        if operation.tags.is_empty() { &existing_tags } else { &operation.tags },
-        operation.importance.unwrap_or(existing.importance).clamp(0, 100),
+        if operation.tags.is_empty() {
+            &existing_tags
+        } else {
+            &operation.tags
+        },
+        operation
+            .importance
+            .unwrap_or(existing.importance)
+            .clamp(0, 100),
         operation
             .confidence
             .unwrap_or(existing.confidence)
@@ -780,7 +837,20 @@ fn list_memory_sources(conn: &Connection) -> Result<Vec<PersonalMemorySource>, S
 
 pub fn list_patch_runs(
     conn: &Connection,
-) -> Result<Vec<(i64, String, String, String, String, Option<String>, i32, i32, String)>, String> {
+) -> Result<
+    Vec<(
+        i64,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        i32,
+        i32,
+        String,
+    )>,
+    String,
+> {
     let mut stmt = conn
         .prepare(
             "SELECT
@@ -817,7 +887,10 @@ pub fn list_patch_runs(
     Ok(rows)
 }
 
-fn get_memory_item_by_id(conn: &Connection, memory_id: i64) -> Result<Option<PersonalMemoryItem>, String> {
+fn get_memory_item_by_id(
+    conn: &Connection,
+    memory_id: i64,
+) -> Result<Option<PersonalMemoryItem>, String> {
     conn.query_row(
         "SELECT
             id,
@@ -1019,7 +1092,11 @@ fn set_memory_status(conn: &Connection, memory_id: i64, status: &str) -> Result<
     Ok(())
 }
 
-fn create_patch_run(conn: &Connection, source_context_id: &str, patch_json: &str) -> Result<i64, String> {
+fn create_patch_run(
+    conn: &Connection,
+    source_context_id: &str,
+    patch_json: &str,
+) -> Result<i64, String> {
     conn.execute(
         "INSERT INTO personal_memory_patch_runs (
             source_context_id,
@@ -1183,7 +1260,8 @@ mod tests {
           ]
         }"#;
 
-        let error = apply_memory_patch(&mut conn, patch_json, "test-context").expect_err("reject patch");
+        let error =
+            apply_memory_patch(&mut conn, patch_json, "test-context").expect_err("reject patch");
         assert!(error.contains("evidence"));
     }
 }

@@ -1,7 +1,7 @@
-﻿use crate::commands::api_proxy;
+use crate::commands::api_proxy;
 use crate::db::connection::{AppDataDirState, DbState};
 use crate::db::repositories::personal_memory_repo;
-use crate::services::rag_memory_service;
+use crate::services::{ai_response_service, rag_memory_service};
 use chrono::{Datelike, Duration, Local, NaiveDate};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -69,7 +69,14 @@ pub async fn generate_tarot_insight(
     app_data_dir: State<'_, AppDataDirState>,
     date: String,
 ) -> Result<InsightReportDto, String> {
-    generate_insight_report(state, app_data_dir, "tarot".to_string(), "day".to_string(), date).await
+    generate_insight_report(
+        state,
+        app_data_dir,
+        "tarot".to_string(),
+        "day".to_string(),
+        date,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -79,7 +86,14 @@ pub async fn generate_period_report(
     period_type: String,
     anchor_date: String,
 ) -> Result<InsightReportDto, String> {
-    generate_insight_report(state, app_data_dir, "report".to_string(), period_type, anchor_date).await
+    generate_insight_report(
+        state,
+        app_data_dir,
+        "report".to_string(),
+        period_type,
+        anchor_date,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -90,7 +104,12 @@ pub fn list_insight_reports(
     limit: Option<i64>,
 ) -> Result<Vec<InsightReportDto>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    list_reports(&conn, report_kind.as_deref(), period_type.as_deref(), limit.unwrap_or(20))
+    list_reports(
+        &conn,
+        report_kind.as_deref(),
+        period_type.as_deref(),
+        limit.unwrap_or(20),
+    )
 }
 
 #[tauri::command]
@@ -147,50 +166,57 @@ async fn generate_insight_report(
         (snapshot_id, context_json)
     };
 
-    let response_payload = match api_proxy::execute_daily_insight_api_request(&state, request_json.clone()).await {
-        Ok(payload) => payload,
-        Err(error) => {
-            let conn = state.0.lock().map_err(|e| e.to_string())?;
-            insert_report(&conn, NewInsightReport {
-                report_kind: &report_kind,
-                period_type: &period_type,
-                start_date: &fmt_date(range.start_date),
-                end_date: &fmt_date(range.end_date),
-                title: "生成失败",
-                summary: &error,
-                content_json: &json!({ "error": error }),
-                raw_response: "",
-                context_snapshot_id: Some(snapshot_id),
-                status: "error",
-                error_message: Some(&error),
-                memory_patch_json: None,
-                memory_patch_apply_status: None,
-                memory_patch_apply_message: None,
-            })?;
-            return Err(error);
-        }
-    };
+    let response_payload =
+        match api_proxy::execute_daily_insight_api_request(&state, request_json.clone()).await {
+            Ok(payload) => payload,
+            Err(error) => {
+                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                insert_report(
+                    &conn,
+                    NewInsightReport {
+                        report_kind: &report_kind,
+                        period_type: &period_type,
+                        start_date: &fmt_date(range.start_date),
+                        end_date: &fmt_date(range.end_date),
+                        title: "生成失败",
+                        summary: &error,
+                        content_json: &json!({ "error": error }),
+                        raw_response: "",
+                        context_snapshot_id: Some(snapshot_id),
+                        status: "error",
+                        error_message: Some(&error),
+                        memory_patch_json: None,
+                        memory_patch_apply_status: None,
+                        memory_patch_apply_message: None,
+                    },
+                )?;
+                return Err(error);
+            }
+        };
 
     let parsed = match parse_insight_response(&response_payload) {
         Ok(value) => value,
         Err(error) => {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
-            insert_report(&conn, NewInsightReport {
-                report_kind: &report_kind,
-                period_type: &period_type,
-                start_date: &fmt_date(range.start_date),
-                end_date: &fmt_date(range.end_date),
-                title: "解析失败",
-                summary: &error,
-                content_json: &json!({ "error": error, "raw_response": response_payload }),
-                raw_response: &response_payload,
-                context_snapshot_id: Some(snapshot_id),
-                status: "error",
-                error_message: Some(&error),
-                memory_patch_json: None,
-                memory_patch_apply_status: None,
-                memory_patch_apply_message: None,
-            })?;
+            insert_report(
+                &conn,
+                NewInsightReport {
+                    report_kind: &report_kind,
+                    period_type: &period_type,
+                    start_date: &fmt_date(range.start_date),
+                    end_date: &fmt_date(range.end_date),
+                    title: "解析失败",
+                    summary: &error,
+                    content_json: &json!({ "error": error, "raw_response": response_payload }),
+                    raw_response: &response_payload,
+                    context_snapshot_id: Some(snapshot_id),
+                    status: "error",
+                    error_message: Some(&error),
+                    memory_patch_json: None,
+                    memory_patch_apply_status: None,
+                    memory_patch_apply_message: None,
+                },
+            )?;
             return Err(error);
         }
     };
@@ -206,22 +232,29 @@ async fn generate_insight_report(
 
     let report_id = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        insert_report(&conn, NewInsightReport {
-            report_kind: &report_kind,
-            period_type: &period_type,
-            start_date: &fmt_date(range.start_date),
-            end_date: &fmt_date(range.end_date),
-            title: if parsed.title.trim().is_empty() { default_title(&report_kind, &period_type) } else { &parsed.title },
-            summary: &parsed.summary,
-            content_json: &full_content,
-            raw_response: &response_payload,
-            context_snapshot_id: Some(snapshot_id),
-            status: "success",
-            error_message: None,
-            memory_patch_json: memory_patch_json.as_deref(),
-            memory_patch_apply_status: None,
-            memory_patch_apply_message: None,
-        })?
+        insert_report(
+            &conn,
+            NewInsightReport {
+                report_kind: &report_kind,
+                period_type: &period_type,
+                start_date: &fmt_date(range.start_date),
+                end_date: &fmt_date(range.end_date),
+                title: if parsed.title.trim().is_empty() {
+                    default_title(&report_kind, &period_type)
+                } else {
+                    &parsed.title
+                },
+                summary: &parsed.summary,
+                content_json: &full_content,
+                raw_response: &response_payload,
+                context_snapshot_id: Some(snapshot_id),
+                status: "success",
+                error_message: None,
+                memory_patch_json: memory_patch_json.as_deref(),
+                memory_patch_apply_status: None,
+                memory_patch_apply_message: None,
+            },
+        )?
     };
 
     if let Some(patch_json) = memory_patch_json.as_deref() {
@@ -232,18 +265,37 @@ async fn generate_insight_report(
                 patch_json,
                 &format!("insight_report:{report_id}"),
             );
-            let (status, message) = match result {
+            let (mut status, mut message) = match result {
                 Ok(result) => (result.apply_status, result.message),
                 Err(error) => ("rejected".to_string(), error),
             };
-            update_report_patch_status(&conn, report_id, &status, &message)?;
             let rag_memory_dir = app_data_dir.0.join("rag_memory");
-            let _ = rag_memory_service::write_patch_run_file(
+            if let Err(error) = rag_memory_service::write_patch_run_file(
                 &rag_memory_dir,
                 &Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
                 patch_json,
-            );
-            let _ = rag_memory_service::rebuild_rag_memory_files(&conn, &rag_memory_dir);
+            ) {
+                if status == "applied" {
+                    status = "partial".to_string();
+                }
+                if message.trim().is_empty() {
+                    message = format!("patch mirror write failed: {error}");
+                } else {
+                    message = format!("{message}; patch mirror write failed: {error}");
+                }
+            }
+            if let Err(error) = rag_memory_service::rebuild_rag_memory_files(&conn, &rag_memory_dir)
+            {
+                if status == "applied" {
+                    status = "partial".to_string();
+                }
+                if message.trim().is_empty() {
+                    message = format!("rag_memory rebuild failed: {error}");
+                } else {
+                    message = format!("{message}; rag_memory rebuild failed: {error}");
+                }
+            }
+            update_report_patch_status(&conn, report_id, &status, &message)?;
             (status, message)
         };
         let _ = patch_result;
@@ -266,7 +318,8 @@ fn build_insight_context(
     } else {
         period_type
     };
-    let personal_context = personal_memory_repo::build_personal_context_pack(conn, &start_date, mode)?;
+    let personal_context =
+        personal_memory_repo::build_personal_context_pack(conn, &start_date, mode)?;
     let records = query_records(conn, &start_date, &end_date)?;
     let ledger = query_ledger(conn, &start_date, &end_date)?;
     let journals = query_journals(conn, &start_date, &end_date)?;
@@ -274,7 +327,14 @@ fn build_insight_context(
     let plans = query_plans(conn, &start_date, &end_date)?;
     let previous_reports = query_previous_reports(conn, 12)?;
 
-    let evidence_index = collect_evidence(&records, &ledger, &journals, &bonds, &plans, &previous_reports);
+    let evidence_index = collect_evidence(
+        &records,
+        &ledger,
+        &journals,
+        &bonds,
+        &plans,
+        &previous_reports,
+    );
 
     Ok(json!({
         "schema_version": "1.0",
@@ -301,7 +361,11 @@ fn build_insight_context(
     }))
 }
 
-fn query_records(conn: &Connection, start_date: &str, end_date: &str) -> Result<Vec<Value>, String> {
+fn query_records(
+    conn: &Connection,
+    start_date: &str,
+    end_date: &str,
+) -> Result<Vec<Value>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, date, title, minutes, difficulty_star, parent_id, is_completed,
@@ -311,26 +375,27 @@ fn query_records(conn: &Connection, start_date: &str, end_date: &str) -> Result<
              ORDER BY date, parent_id, created_at, id",
         )
         .map_err(|e| e.to_string())?;
-    let rows = stmt.query_map(params![start_date, end_date], |row| {
-        let id: i64 = row.get(0)?;
-        Ok(json!({
-            "evidence_id": format!("record:{id}"),
-            "id": id,
-            "date": row.get::<_, String>(1)?,
-            "title": row.get::<_, String>(2)?,
-            "minutes": row.get::<_, i32>(3)?,
-            "difficulty_star": row.get::<_, i32>(4)?,
-            "parent_id": row.get::<_, Option<i64>>(5)?,
-            "is_completed": row.get::<_, i32>(6)? == 1,
-            "completed_at": row.get::<_, Option<String>>(7)?,
-            "elapsed_seconds": row.get::<_, i64>(8)?,
-            "timer_mode": row.get::<_, String>(9)?,
-            "countdown_target_seconds": row.get::<_, Option<i32>>(10)?,
-        }))
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![start_date, end_date], |row| {
+            let id: i64 = row.get(0)?;
+            Ok(json!({
+                "evidence_id": format!("record:{id}"),
+                "id": id,
+                "date": row.get::<_, String>(1)?,
+                "title": row.get::<_, String>(2)?,
+                "minutes": row.get::<_, i32>(3)?,
+                "difficulty_star": row.get::<_, i32>(4)?,
+                "parent_id": row.get::<_, Option<i64>>(5)?,
+                "is_completed": row.get::<_, i32>(6)? == 1,
+                "completed_at": row.get::<_, Option<String>>(7)?,
+                "elapsed_seconds": row.get::<_, i64>(8)?,
+                "timer_mode": row.get::<_, String>(9)?,
+                "countdown_target_seconds": row.get::<_, Option<i32>>(10)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
@@ -343,28 +408,33 @@ fn query_ledger(conn: &Connection, start_date: &str, end_date: &str) -> Result<V
              ORDER BY date, id",
         )
         .map_err(|e| e.to_string())?;
-    let rows = stmt.query_map(params![start_date, end_date], |row| {
-        let id: i64 = row.get(0)?;
-        Ok(json!({
-            "evidence_id": format!("ledger:{id}"),
-            "id": id,
-            "date": row.get::<_, String>(1)?,
-            "record_id": row.get::<_, Option<i64>>(2)?,
-            "dimension_key": row.get::<_, String>(3)?,
-            "change_value": row.get::<_, i32>(4)?,
-            "source_title": row.get::<_, String>(5)?,
-            "reason": row.get::<_, String>(6)?,
-            "confidence": row.get::<_, Option<f64>>(7)?,
-            "engine": row.get::<_, String>(8)?,
-        }))
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![start_date, end_date], |row| {
+            let id: i64 = row.get(0)?;
+            Ok(json!({
+                "evidence_id": format!("ledger:{id}"),
+                "id": id,
+                "date": row.get::<_, String>(1)?,
+                "record_id": row.get::<_, Option<i64>>(2)?,
+                "dimension_key": row.get::<_, String>(3)?,
+                "change_value": row.get::<_, i32>(4)?,
+                "source_title": row.get::<_, String>(5)?,
+                "reason": row.get::<_, String>(6)?,
+                "confidence": row.get::<_, Option<f64>>(7)?,
+                "engine": row.get::<_, String>(8)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
-fn query_journals(conn: &Connection, start_date: &str, end_date: &str) -> Result<Vec<Value>, String> {
+fn query_journals(
+    conn: &Connection,
+    start_date: &str,
+    end_date: &str,
+) -> Result<Vec<Value>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, entry_date, title, content, mood
@@ -373,24 +443,29 @@ fn query_journals(conn: &Connection, start_date: &str, end_date: &str) -> Result
              ORDER BY entry_date",
         )
         .map_err(|e| e.to_string())?;
-    let rows = stmt.query_map(params![start_date, end_date], |row| {
-        let id: i64 = row.get(0)?;
-        Ok(json!({
-            "evidence_id": format!("journal:{id}"),
-            "id": id,
-            "entry_date": row.get::<_, String>(1)?,
-            "title": row.get::<_, String>(2)?,
-            "content": row.get::<_, String>(3)?,
-            "mood": row.get::<_, String>(4)?,
-        }))
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![start_date, end_date], |row| {
+            let id: i64 = row.get(0)?;
+            Ok(json!({
+                "evidence_id": format!("journal:{id}"),
+                "id": id,
+                "entry_date": row.get::<_, String>(1)?,
+                "title": row.get::<_, String>(2)?,
+                "content": row.get::<_, String>(3)?,
+                "mood": row.get::<_, String>(4)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
-fn query_bond_entries(conn: &Connection, start_date: &str, end_date: &str) -> Result<Vec<Value>, String> {
+fn query_bond_entries(
+    conn: &Connection,
+    start_date: &str,
+    end_date: &str,
+) -> Result<Vec<Value>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT e.id, e.person_id, e.entry_date, e.title, e.content,
@@ -401,23 +476,24 @@ fn query_bond_entries(conn: &Connection, start_date: &str, end_date: &str) -> Re
              ORDER BY e.entry_date, e.id",
         )
         .map_err(|e| e.to_string())?;
-    let rows = stmt.query_map(params![start_date, end_date], |row| {
-        let id: i64 = row.get(0)?;
-        Ok(json!({
-            "evidence_id": format!("bond_entry:{id}"),
-            "id": id,
-            "person_id": row.get::<_, i64>(1)?,
-            "entry_date": row.get::<_, String>(2)?,
-            "title": row.get::<_, String>(3)?,
-            "content": row.get::<_, String>(4)?,
-            "person_name": row.get::<_, String>(5)?,
-            "relation_label": row.get::<_, String>(6)?,
-            "bond_score": row.get::<_, i32>(7)?,
-        }))
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![start_date, end_date], |row| {
+            let id: i64 = row.get(0)?;
+            Ok(json!({
+                "evidence_id": format!("bond_entry:{id}"),
+                "id": id,
+                "person_id": row.get::<_, i64>(1)?,
+                "entry_date": row.get::<_, String>(2)?,
+                "title": row.get::<_, String>(3)?,
+                "content": row.get::<_, String>(4)?,
+                "person_name": row.get::<_, String>(5)?,
+                "relation_label": row.get::<_, String>(6)?,
+                "bond_score": row.get::<_, i32>(7)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
@@ -469,23 +545,24 @@ fn query_previous_reports(conn: &Connection, limit: i64) -> Result<Vec<Value>, S
              LIMIT ?1",
         )
         .map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([limit.max(1)], |row| {
-        let id: i64 = row.get(0)?;
-        Ok(json!({
-            "evidence_id": format!("insight_report:{id}"),
-            "id": id,
-            "report_kind": row.get::<_, String>(1)?,
-            "period_type": row.get::<_, String>(2)?,
-            "start_date": row.get::<_, String>(3)?,
-            "end_date": row.get::<_, String>(4)?,
-            "title": row.get::<_, String>(5)?,
-            "summary": row.get::<_, String>(6)?,
-            "created_at": row.get::<_, String>(7)?,
-        }))
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([limit.max(1)], |row| {
+            let id: i64 = row.get(0)?;
+            Ok(json!({
+                "evidence_id": format!("insight_report:{id}"),
+                "id": id,
+                "report_kind": row.get::<_, String>(1)?,
+                "period_type": row.get::<_, String>(2)?,
+                "start_date": row.get::<_, String>(3)?,
+                "end_date": row.get::<_, String>(4)?,
+                "title": row.get::<_, String>(5)?,
+                "summary": row.get::<_, String>(6)?,
+                "created_at": row.get::<_, String>(7)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
@@ -629,8 +706,11 @@ fn delete_report_and_orphan_context(conn: &Connection, report_id: i64) -> Result
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "insight report not found".to_string())?;
 
-    conn.execute("DELETE FROM insight_reports WHERE id = ?1", params![report_id])
-        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM insight_reports WHERE id = ?1",
+        params![report_id],
+    )
+    .map_err(|e| e.to_string())?;
 
     if let Some(snapshot_id) = context_snapshot_id {
         let remaining_refs: i64 = conn
@@ -710,7 +790,11 @@ fn list_reports(
              LIMIT ?3",
         )
         .map_err(|e| e.to_string())?;
-    let rows = stmt.query_map(params![kind_filter, period_filter, limit.max(1)], map_report_row)
+    let rows = stmt
+        .query_map(
+            params![kind_filter, period_filter, limit.max(1)],
+            map_report_row,
+        )
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
@@ -763,27 +847,12 @@ fn map_report_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InsightReportDto>
 }
 
 fn parse_insight_response(raw_response: &str) -> Result<ParsedInsightResponse, String> {
-    let clean = strip_json_fence(raw_response);
-    let value: Value = serde_json::from_str(&clean).map_err(|e| format!("AI response is not valid JSON: {e}"))?;
     let parsed: ParsedInsightResponse =
-        serde_json::from_value(value).map_err(|e| format!("AI response schema mismatch: {e}"))?;
+        ai_response_service::parse_ai_json(raw_response, "daily insight api")?;
     if parsed.report.is_null() {
         return Err("AI response is missing report".into());
     }
     Ok(parsed)
-}
-
-fn strip_json_fence(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if !trimmed.starts_with("```") {
-        return trimmed.to_string();
-    }
-    trimmed
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim()
-        .to_string()
 }
 
 fn resolve_period_range(period_type: &str, anchor_date: &str) -> Result<PeriodRange, String> {
@@ -795,7 +864,8 @@ fn resolve_period_range(period_type: &str, anchor_date: &str) -> Result<PeriodRa
             end_date: anchor,
         }),
         "week" => {
-            let start_date = anchor - Duration::days(anchor.weekday().num_days_from_monday() as i64);
+            let start_date =
+                anchor - Duration::days(anchor.weekday().num_days_from_monday() as i64);
             Ok(PeriodRange {
                 start_date,
                 end_date: start_date + Duration::days(6),
@@ -811,7 +881,10 @@ fn resolve_period_range(period_type: &str, anchor_date: &str) -> Result<PeriodRa
             }
             .and_then(|date| date.pred_opt())
             .ok_or_else(|| "invalid month end".to_string())?;
-            Ok(PeriodRange { start_date, end_date })
+            Ok(PeriodRange {
+                start_date,
+                end_date,
+            })
         }
         _ => Err("period_type must be day, week, or month".into()),
     }
@@ -874,61 +947,58 @@ mod tests {
     fn deleting_report_removes_orphan_context_snapshot() {
         let conn = Connection::open_in_memory().expect("db");
         run_migrations(&conn).expect("migrations");
-        let snapshot_id = insert_context_snapshot(
-            &conn,
-            "report",
-            "day",
-            "2026-06-13",
-            "2026-06-13",
-            "{}",
-        )
-        .expect("snapshot");
+        let snapshot_id =
+            insert_context_snapshot(&conn, "report", "day", "2026-06-13", "2026-06-13", "{}")
+                .expect("snapshot");
         let report_id = insert_test_report(&conn, snapshot_id, "日报");
 
         delete_report_and_orphan_context(&conn, report_id).expect("delete");
 
-        assert!(get_report_by_id(&conn, report_id).expect("report lookup").is_none());
-        assert!(get_context_snapshot(&conn, snapshot_id).expect("snapshot lookup").is_none());
+        assert!(get_report_by_id(&conn, report_id)
+            .expect("report lookup")
+            .is_none());
+        assert!(get_context_snapshot(&conn, snapshot_id)
+            .expect("snapshot lookup")
+            .is_none());
     }
 
     #[test]
     fn deleting_report_keeps_shared_context_snapshot() {
         let conn = Connection::open_in_memory().expect("db");
         run_migrations(&conn).expect("migrations");
-        let snapshot_id = insert_context_snapshot(
-            &conn,
-            "report",
-            "day",
-            "2026-06-13",
-            "2026-06-13",
-            "{}",
-        )
-        .expect("snapshot");
+        let snapshot_id =
+            insert_context_snapshot(&conn, "report", "day", "2026-06-13", "2026-06-13", "{}")
+                .expect("snapshot");
         let first_report_id = insert_test_report(&conn, snapshot_id, "日报 A");
         let _second_report_id = insert_test_report(&conn, snapshot_id, "日报 B");
 
         delete_report_and_orphan_context(&conn, first_report_id).expect("delete");
 
-        assert!(get_context_snapshot(&conn, snapshot_id).expect("snapshot lookup").is_some());
+        assert!(get_context_snapshot(&conn, snapshot_id)
+            .expect("snapshot lookup")
+            .is_some());
     }
 
     fn insert_test_report(conn: &Connection, snapshot_id: i64, title: &str) -> i64 {
-        insert_report(conn, NewInsightReport {
-            report_kind: "report",
-            period_type: "day",
-            start_date: "2026-06-13",
-            end_date: "2026-06-13",
-            title,
-            summary: "",
-            content_json: &json!({ "report": {} }),
-            raw_response: "{}",
-            context_snapshot_id: Some(snapshot_id),
-            status: "success",
-            error_message: None,
-            memory_patch_json: None,
-            memory_patch_apply_status: None,
-            memory_patch_apply_message: None,
-        })
+        insert_report(
+            conn,
+            NewInsightReport {
+                report_kind: "report",
+                period_type: "day",
+                start_date: "2026-06-13",
+                end_date: "2026-06-13",
+                title,
+                summary: "",
+                content_json: &json!({ "report": {} }),
+                raw_response: "{}",
+                context_snapshot_id: Some(snapshot_id),
+                status: "success",
+                error_message: None,
+                memory_patch_json: None,
+                memory_patch_apply_status: None,
+                memory_patch_apply_message: None,
+            },
+        )
         .expect("report")
     }
 }

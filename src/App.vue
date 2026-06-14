@@ -98,7 +98,7 @@ const navItems = [
 
       <div class="sidebar-footer">
         <div class="footer-line"></div>
-        <div class="footer-text">v0.2.0</div>
+        <div class="footer-text">v0.2.1</div>
       </div>
     </aside>
 

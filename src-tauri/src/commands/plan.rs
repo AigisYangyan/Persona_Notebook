@@ -2,6 +2,7 @@ use crate::commands::api_proxy;
 use crate::db::connection::DbState;
 use crate::db::repositories::{dimension_repo, ledger_repo, plan_repo, record_repo};
 use crate::models::plan::PlanCycle;
+use crate::services::ai_response_service;
 use chrono::{Datelike, Duration, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -204,7 +205,8 @@ pub fn save_plan_cycle(
         &fmt_date(range.end_date),
     )
     .map_err(|e| e.to_string())?;
-    plan_repo::update_cycle_details(&conn, cycle.id, &title, &summary).map_err(|e| e.to_string())?;
+    plan_repo::update_cycle_details(&conn, cycle.id, &title, &summary)
+        .map_err(|e| e.to_string())?;
     load_plan_snapshot(&conn, &period_type, Some(&anchor_date))
 }
 
@@ -241,11 +243,8 @@ pub fn save_plan_item(
         ),
         None => None,
     };
-    let resolved_progress_percent = resolve_goal_progress(
-        existing_item.as_ref(),
-        progress_percent,
-        is_completed,
-    );
+    let resolved_progress_percent =
+        resolve_goal_progress(existing_item.as_ref(), progress_percent, is_completed);
     plan_repo::save_item(
         &conn,
         item_id,
@@ -298,7 +297,8 @@ pub async fn refresh_plan_progress(
     })
     .map_err(|e| e.to_string())?;
 
-    let response_payload = api_proxy::execute_plan_api_request(&state, request_payload.clone()).await?;
+    let response_payload =
+        api_proxy::execute_plan_api_request(&state, request_payload.clone()).await?;
     let parsed = parse_plan_ai_response(&response_payload)?;
     let proposal_json = parsed
         .proposal
@@ -425,7 +425,8 @@ pub fn apply_plan_ai_update(
     let proposal_json = session
         .proposal_json
         .ok_or_else(|| "plan ai session has no proposal to apply".to_string())?;
-    let proposal: PlanAiProposalDto = serde_json::from_str(&proposal_json).map_err(|e| e.to_string())?;
+    let proposal: PlanAiProposalDto =
+        serde_json::from_str(&proposal_json).map_err(|e| e.to_string())?;
     let cycle = plan_repo::get_cycle_by_id(&conn, session.cycle_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "plan cycle not found".to_string())?;
@@ -499,8 +500,8 @@ fn load_calendar_plan_history_item(
     period_type: &str,
     date: &str,
 ) -> Result<Option<CalendarPlanHistoryItemDto>, String> {
-    let Some(cycle) = plan_repo::get_cycle_covering_date(conn, period_type, date)
-        .map_err(|e| e.to_string())?
+    let Some(cycle) =
+        plan_repo::get_cycle_covering_date(conn, period_type, date).map_err(|e| e.to_string())?
     else {
         return Ok(None);
     };
@@ -532,8 +533,9 @@ fn build_growth_snapshot(
         .collect::<std::collections::HashMap<_, _>>();
     let record_counts = record_repo::get_record_counts_in_range(conn, &start_str, &end_str)
         .map_err(|e| e.to_string())?;
-    let review_flags = crate::db::repositories::daily_review_repo::get_flags_in_range(conn, &start_str, &end_str)
-        .map_err(|e| e.to_string())?;
+    let review_flags =
+        crate::db::repositories::daily_review_repo::get_flags_in_range(conn, &start_str, &end_str)
+            .map_err(|e| e.to_string())?;
     let analyzed_days = review_flags.iter().filter(|flag| flag.is_analyzed).count() as i32;
     let record_count = record_counts.iter().map(|item| item.count).sum::<i32>();
     let active_days = record_counts.len() as i32;
@@ -577,8 +579,12 @@ fn build_related_week_plans(
     conn: &rusqlite::Connection,
     range: &PeriodRange,
 ) -> Result<Vec<RelatedWeekPlanDto>, String> {
-    let cycles = plan_repo::list_week_cycles_in_range(conn, &fmt_date(range.start_date), &fmt_date(range.end_date))
-        .map_err(|e| e.to_string())?;
+    let cycles = plan_repo::list_week_cycles_in_range(
+        conn,
+        &fmt_date(range.start_date),
+        &fmt_date(range.end_date),
+    )
+    .map_err(|e| e.to_string())?;
     let mut result = Vec::with_capacity(cycles.len());
     for cycle in cycles {
         let items = plan_repo::list_items_by_cycle(conn, cycle.id).map_err(|e| e.to_string())?;
@@ -607,7 +613,13 @@ fn build_goal_progress_summary(items: &[crate::models::plan::PlanItem]) -> GoalP
     } else {
         let total_progress = items
             .iter()
-            .map(|item| if item.is_completed { 100 } else { item.progress_percent.clamp(0, 100) })
+            .map(|item| {
+                if item.is_completed {
+                    100
+                } else {
+                    item.progress_percent.clamp(0, 100)
+                }
+            })
             .sum::<i32>();
         (total_progress as f64 / total_items as f64).round() as i32
     };
@@ -693,7 +705,7 @@ fn build_growth_headline(total: i32, max_total: i32) -> String {
 }
 
 fn parse_plan_ai_response(payload: &str) -> Result<PlanAiApiResponse, String> {
-    let parsed: PlanAiApiResponse = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+    let parsed: PlanAiApiResponse = ai_response_service::parse_ai_json(payload, "plan api")?;
     if parsed.requires_clarification {
         if parsed.questions.is_empty() {
             return Err("plan api returned clarification without questions".into());
@@ -704,7 +716,10 @@ fn parse_plan_ai_response(payload: &str) -> Result<PlanAiApiResponse, String> {
     Ok(parsed)
 }
 
-fn resolve_period_range(period_type: &str, anchor_date: Option<&str>) -> Result<PeriodRange, String> {
+fn resolve_period_range(
+    period_type: &str,
+    anchor_date: Option<&str>,
+) -> Result<PeriodRange, String> {
     let anchor = match anchor_date {
         Some(value) => NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|e| e.to_string())?,
         None => Local::now().date_naive(),
@@ -715,7 +730,10 @@ fn resolve_period_range(period_type: &str, anchor_date: Option<&str>) -> Result<
             let offset = anchor.weekday().num_days_from_monday() as i64;
             let start_date = anchor - Duration::days(offset);
             let end_date = start_date + Duration::days(6);
-            Ok(PeriodRange { start_date, end_date })
+            Ok(PeriodRange {
+                start_date,
+                end_date,
+            })
         }
         "month" => {
             let start_date = NaiveDate::from_ymd_opt(anchor.year(), anchor.month(), 1)
@@ -726,8 +744,13 @@ fn resolve_period_range(period_type: &str, anchor_date: Option<&str>) -> Result<
                 NaiveDate::from_ymd_opt(anchor.year(), anchor.month() + 1, 1)
             }
             .ok_or_else(|| "invalid next month".to_string())?;
-            let end_date = next_month.pred_opt().ok_or_else(|| "invalid month end".to_string())?;
-            Ok(PeriodRange { start_date, end_date })
+            let end_date = next_month
+                .pred_opt()
+                .ok_or_else(|| "invalid month end".to_string())?;
+            Ok(PeriodRange {
+                start_date,
+                end_date,
+            })
         }
         _ => Err(format!("unsupported period type: {period_type}")),
     }
@@ -759,7 +782,9 @@ mod tests {
 
     #[test]
     fn parse_plan_ai_response_requires_questions_when_clarifying() {
-        let result = parse_plan_ai_response(r#"{"requires_clarification":true,"questions":[],"proposal":null}"#);
+        let result = parse_plan_ai_response(
+            r#"{"requires_clarification":true,"questions":[],"proposal":null}"#,
+        );
         assert!(result.is_err());
     }
 
