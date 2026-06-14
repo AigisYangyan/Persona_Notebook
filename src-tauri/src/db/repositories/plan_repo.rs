@@ -228,7 +228,10 @@ pub fn replace_items_for_cycle(
     cycle_id: i64,
     items: &[PlanItemInput],
 ) -> Result<Vec<PlanItem>> {
-    conn.execute("DELETE FROM plan_items WHERE cycle_id = ?1", params![cycle_id])?;
+    conn.execute(
+        "DELETE FROM plan_items WHERE cycle_id = ?1",
+        params![cycle_id],
+    )?;
     for item in items {
         conn.execute(
             "INSERT INTO plan_items (
@@ -323,7 +326,13 @@ pub fn update_ai_session_resolution(
              status = ?5,
              updated_at = datetime('now', 'localtime')
          WHERE id = ?1",
-        params![session_id, response_payload, questions_json, proposal_json, status],
+        params![
+            session_id,
+            response_payload,
+            questions_json,
+            proposal_json,
+            status
+        ],
     )?;
     Ok(())
 }

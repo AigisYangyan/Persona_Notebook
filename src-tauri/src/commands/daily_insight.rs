@@ -166,33 +166,38 @@ async fn generate_insight_report(
         (snapshot_id, context_json)
     };
 
-    let response_payload =
-        match api_proxy::execute_daily_insight_api_request(&state, request_json.clone()).await {
-            Ok(payload) => payload,
-            Err(error) => {
-                let conn = state.0.lock().map_err(|e| e.to_string())?;
-                insert_report(
-                    &conn,
-                    NewInsightReport {
-                        report_kind: &report_kind,
-                        period_type: &period_type,
-                        start_date: &fmt_date(range.start_date),
-                        end_date: &fmt_date(range.end_date),
-                        title: "生成失败",
-                        summary: &error,
-                        content_json: &json!({ "error": error }),
-                        raw_response: "",
-                        context_snapshot_id: Some(snapshot_id),
-                        status: "error",
-                        error_message: Some(&error),
-                        memory_patch_json: None,
-                        memory_patch_apply_status: None,
-                        memory_patch_apply_message: None,
-                    },
-                )?;
-                return Err(error);
-            }
-        };
+    let response_payload = match api_proxy::execute_daily_insight_api_request(
+        &state,
+        request_json.clone(),
+        resolve_insight_task_kind(&report_kind, &period_type),
+    )
+    .await
+    {
+        Ok(payload) => payload,
+        Err(error) => {
+            let conn = state.0.lock().map_err(|e| e.to_string())?;
+            insert_report(
+                &conn,
+                NewInsightReport {
+                    report_kind: &report_kind,
+                    period_type: &period_type,
+                    start_date: &fmt_date(range.start_date),
+                    end_date: &fmt_date(range.end_date),
+                    title: "生成失败",
+                    summary: &error,
+                    content_json: &json!({ "error": error }),
+                    raw_response: "",
+                    context_snapshot_id: Some(snapshot_id),
+                    status: "error",
+                    error_message: Some(&error),
+                    memory_patch_json: None,
+                    memory_patch_apply_status: None,
+                    memory_patch_apply_message: None,
+                },
+            )?;
+            return Err(error);
+        }
+    };
 
     let parsed = match parse_insight_response(&response_payload) {
         Ok(value) => value,
@@ -219,6 +224,11 @@ async fn generate_insight_report(
             )?;
             return Err(error);
         }
+    };
+
+    let parsed = ParsedInsightResponse {
+        report: normalize_report_payload(&report_kind, parsed.report),
+        ..parsed
     };
 
     let full_content = serde_json::to_value(&parsed).map_err(|e| e.to_string())?;
@@ -303,6 +313,18 @@ async fn generate_insight_report(
 
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     get_report_by_id(&conn, report_id)?.ok_or_else(|| "insight report was not saved".to_string())
+}
+
+fn resolve_insight_task_kind(report_kind: &str, period_type: &str) -> api_proxy::AiTaskKind {
+    if report_kind == "tarot" {
+        api_proxy::AiTaskKind::Tarot
+    } else {
+        match period_type {
+            "week" => api_proxy::AiTaskKind::PeriodReportWeek,
+            "month" => api_proxy::AiTaskKind::PeriodReportMonth,
+            _ => api_proxy::AiTaskKind::PeriodReportDay,
+        }
+    }
 }
 
 fn build_insight_context(
@@ -846,6 +868,140 @@ fn map_report_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InsightReportDto>
     })
 }
 
+fn normalize_entry_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        }
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        Value::Array(items) => {
+            let values = items
+                .iter()
+                .filter_map(normalize_entry_text)
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>();
+            if values.is_empty() {
+                None
+            } else {
+                Some(values.join("; "))
+            }
+        }
+        Value::Object(map) => {
+            const TITLE_KEYS: &[&str] = &["item", "title", "name", "label", "topic"];
+            const BODY_KEYS: &[&str] = &[
+                "description",
+                "detail",
+                "summary",
+                "text",
+                "content",
+                "message",
+                "reason",
+                "value",
+            ];
+            let title = TITLE_KEYS
+                .iter()
+                .filter_map(|key| map.get(*key))
+                .find_map(normalize_entry_text)
+                .unwrap_or_default();
+            let body = BODY_KEYS
+                .iter()
+                .filter_map(|key| map.get(*key))
+                .find_map(normalize_entry_text)
+                .unwrap_or_default();
+            if !title.is_empty() && !body.is_empty() {
+                if body.contains(&title) {
+                    return Some(body);
+                }
+                return Some(format!("{title}: {body}"));
+            }
+            if !body.is_empty() {
+                return Some(body);
+            }
+            if !title.is_empty() {
+                return Some(title);
+            }
+            map.iter()
+                .filter(|(key, _)| *key != "evidence_ids" && *key != "evidence_id")
+                .find_map(|(_, inner)| normalize_entry_text(inner))
+        }
+        _ => None,
+    }
+}
+
+fn normalize_string_field(report: &mut serde_json::Map<String, Value>, key: &str) {
+    if let Some(text) = report.get(key).and_then(normalize_entry_text) {
+        report.insert(key.to_string(), Value::String(text));
+    }
+}
+
+fn normalize_list_field(report: &mut serde_json::Map<String, Value>, key: &str) {
+    if let Some(value) = report.get(key) {
+        let list = match value {
+            Value::Array(items) => items
+                .iter()
+                .filter_map(normalize_entry_text)
+                .map(Value::String)
+                .collect::<Vec<_>>(),
+            _ => normalize_entry_text(value)
+                .map(|text| vec![Value::String(text)])
+                .unwrap_or_default(),
+        };
+        report.insert(key.to_string(), Value::Array(list));
+    }
+}
+
+fn normalize_report_payload(report_kind: &str, report: Value) -> Value {
+    let mut map = match report {
+        Value::Object(map) => map,
+        other => return other,
+    };
+
+    if report_kind == "tarot" {
+        for key in [
+            "warm_quote",
+            "encouragement",
+            "psychological_theme",
+            "body_signal",
+            "deeper_reading",
+            "risk_reminder",
+            "card_name",
+            "card_mark",
+            "archetype",
+        ] {
+            normalize_string_field(&mut map, key);
+        }
+        normalize_list_field(&mut map, "action");
+    } else {
+        for key in [
+            "time_focus",
+            "growth_changes",
+            "plan_progress",
+            "journal_and_bond_observations",
+            "root_causes",
+            "leverage_points",
+            "not_enough_data",
+        ] {
+            normalize_string_field(&mut map, key);
+        }
+        for key in [
+            "completed",
+            "unfinished",
+            "concrete_remedies",
+            "next_actions",
+        ] {
+            normalize_list_field(&mut map, key);
+        }
+    }
+
+    Value::Object(map)
+}
+
 fn parse_insight_response(raw_response: &str) -> Result<ParsedInsightResponse, String> {
     let parsed: ParsedInsightResponse =
         ai_response_service::parse_ai_json(raw_response, "daily insight api")?;
@@ -941,6 +1097,50 @@ mod tests {
         .expect("parse");
         assert_eq!(parsed.title, "今日牌");
         assert_eq!(parsed.report["card_name"], "力量");
+    }
+
+    #[test]
+    fn normalizes_report_object_entries_into_strings() {
+        let normalized = normalize_report_payload(
+            "report",
+            json!({
+                "completed": [
+                    { "description": "完成高数复习", "evidence_ids": ["record:1"] }
+                ],
+                "unfinished": [
+                    { "item": "背单词", "detail": "没有打卡", "evidence_ids": ["plan_item:1"] }
+                ],
+                "time_focus": {
+                    "description": "时间集中在复变函数和认知天性",
+                    "evidence_ids": ["insight_report:1"]
+                }
+            }),
+        );
+
+        assert_eq!(normalized["completed"][0], "完成高数复习");
+        assert_eq!(normalized["unfinished"][0], "背单词: 没有打卡");
+        assert_eq!(normalized["time_focus"], "时间集中在复变函数和认知天性");
+    }
+
+    #[test]
+    fn normalizes_tarot_action_objects_into_plain_text() {
+        let normalized = normalize_report_payload(
+            "tarot",
+            json!({
+                "card_name": { "title": "隐士" },
+                "action": [
+                    { "item": "写下卡点", "detail": "用 5 分钟写出今天最抗拒的部分" }
+                ],
+                "risk_reminder": { "description": "不要因为焦虑把计划越写越满" }
+            }),
+        );
+
+        assert_eq!(normalized["card_name"], "隐士");
+        assert_eq!(
+            normalized["action"][0],
+            "写下卡点: 用 5 分钟写出今天最抗拒的部分"
+        );
+        assert_eq!(normalized["risk_reminder"], "不要因为焦虑把计划越写越满");
     }
 
     #[test]

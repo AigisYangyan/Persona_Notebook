@@ -2,7 +2,9 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::db::connection::DbState;
-use crate::db::repositories::{daily_review_repo, dimension_repo, ledger_repo, plan_repo, record_repo};
+use crate::db::repositories::{
+    daily_review_repo, dimension_repo, ledger_repo, plan_repo, record_repo,
+};
 
 #[derive(Serialize)]
 pub struct DimensionTotal {
@@ -41,10 +43,7 @@ pub struct LedgerItem {
 }
 
 #[tauri::command]
-pub fn get_ledger_by_date(
-    state: State<DbState>,
-    date: String,
-) -> Result<Vec<LedgerItem>, String> {
+pub fn get_ledger_by_date(state: State<DbState>, date: String) -> Result<Vec<LedgerItem>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let dims = dimension_repo::get_all_dimensions(&conn).map_err(|e| e.to_string())?;
     let dim_map: std::collections::HashMap<String, String> =
@@ -104,10 +103,7 @@ pub fn get_all_ledger(state: State<DbState>, limit: i64) -> Result<Vec<LedgerEnt
                 id: row.get(0)?,
                 date: row.get(1)?,
                 dimension_key: key.clone(),
-                dimension_name: dim_map
-                    .get(&key)
-                    .cloned()
-                    .unwrap_or_else(|| key.clone()),
+                dimension_name: dim_map.get(&key).cloned().unwrap_or_else(|| key.clone()),
                 change_value: row.get(3)?,
                 source_title: row.get(4)?,
                 reason: row.get(5)?,
@@ -124,7 +120,8 @@ pub fn get_all_ledger(state: State<DbState>, limit: i64) -> Result<Vec<LedgerEnt
 #[tauri::command]
 pub fn rollback_ledger(state: State<DbState>, ledger_id: i64) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let Some(date) = ledger_repo::get_ledger_date(&conn, ledger_id).map_err(|e| e.to_string())? else {
+    let Some(date) = ledger_repo::get_ledger_date(&conn, ledger_id).map_err(|e| e.to_string())?
+    else {
         return Err("未找到要回滚的账本记录".into());
     };
 
@@ -209,15 +206,19 @@ pub fn get_calendar_overview(
 
     let start_str = start.format("%Y-%m-%d").to_string();
     let end_str = end.format("%Y-%m-%d").to_string();
-    let record_counts =
-        record_repo::get_record_counts_in_range(&conn, &start_str, &end_str).map_err(|e| e.to_string())?;
-    let review_flags =
-        daily_review_repo::get_flags_in_range(&conn, &start_str, &end_str).map_err(|e| e.to_string())?;
+    let record_counts = record_repo::get_record_counts_in_range(&conn, &start_str, &end_str)
+        .map_err(|e| e.to_string())?;
+    let review_flags = daily_review_repo::get_flags_in_range(&conn, &start_str, &end_str)
+        .map_err(|e| e.to_string())?;
 
-    let flag_map: std::collections::HashMap<String, bool> =
-        review_flags.into_iter().map(|flag| (flag.date, flag.is_analyzed)).collect();
-    let count_map: std::collections::HashMap<String, i32> =
-        record_counts.into_iter().map(|item| (item.date, item.count)).collect();
+    let flag_map: std::collections::HashMap<String, bool> = review_flags
+        .into_iter()
+        .map(|flag| (flag.date, flag.is_analyzed))
+        .collect();
+    let count_map: std::collections::HashMap<String, i32> = record_counts
+        .into_iter()
+        .map(|item| (item.date, item.count))
+        .collect();
 
     let mut items = Vec::new();
     let mut cursor = start;
@@ -269,7 +270,8 @@ fn calculate_streaks(dates: &[String], today: chrono::NaiveDate) -> StreakInfo {
         }
     }
 
-    let date_set: std::collections::HashSet<chrono::NaiveDate> = parsed_dates.iter().copied().collect();
+    let date_set: std::collections::HashSet<chrono::NaiveDate> =
+        parsed_dates.iter().copied().collect();
     let mut current_streak = 0;
     let mut cursor = today;
 

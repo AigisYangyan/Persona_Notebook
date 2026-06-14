@@ -156,7 +156,10 @@ pub fn delete_record(conn: &Connection, id: i64) -> Result<()> {
     for child_id in get_child_ids(conn, id)? {
         delete_record(conn, child_id)?;
     }
-    conn.execute("DELETE FROM record_timer_sessions WHERE record_id = ?1", params![id])?;
+    conn.execute(
+        "DELETE FROM record_timer_sessions WHERE record_id = ?1",
+        params![id],
+    )?;
     conn.execute("DELETE FROM records WHERE id = ?1", params![id])?;
     Ok(())
 }
@@ -227,7 +230,10 @@ pub fn reset_record_timer(conn: &Connection, id: i64) -> Result<()> {
          WHERE id = ?1",
         params![id],
     )?;
-    conn.execute("DELETE FROM record_timer_sessions WHERE record_id = ?1", params![id])?;
+    conn.execute(
+        "DELETE FROM record_timer_sessions WHERE record_id = ?1",
+        params![id],
+    )?;
     Ok(())
 }
 
@@ -289,7 +295,8 @@ pub fn get_record_counts_in_range(
 }
 
 fn get_child_ids(conn: &Connection, parent_id: i64) -> Result<Vec<i64>> {
-    let mut stmt = conn.prepare("SELECT id FROM records WHERE parent_id = ?1 ORDER BY created_at")?;
+    let mut stmt =
+        conn.prepare("SELECT id FROM records WHERE parent_id = ?1 ORDER BY created_at")?;
     let ids = stmt
         .query_map(params![parent_id], |row| row.get(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -372,7 +379,10 @@ mod tests {
         assert_eq!(first.elapsed_seconds, 300);
         assert_eq!(first.minutes, 5);
         assert!(first.timer_started_at.is_none());
-        assert_eq!(second.timer_started_at.as_deref(), Some("2026-06-10 10:05:00"));
+        assert_eq!(
+            second.timer_started_at.as_deref(),
+            Some("2026-06-10 10:05:00")
+        );
     }
 
     #[test]

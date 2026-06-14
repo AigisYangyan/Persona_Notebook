@@ -74,9 +74,13 @@ pub fn delete_bond_person(state: State<DbState>, person_id: i64) -> Result<(), S
 }
 
 #[tauri::command]
-pub fn get_bond_entries(state: State<DbState>, person_id: i64) -> Result<Vec<BondEntryItem>, String> {
+pub fn get_bond_entries(
+    state: State<DbState>,
+    person_id: i64,
+) -> Result<Vec<BondEntryItem>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let entries = mind_repo::list_bond_entries_by_person(&conn, person_id).map_err(|e| e.to_string())?;
+    let entries =
+        mind_repo::list_bond_entries_by_person(&conn, person_id).map_err(|e| e.to_string())?;
     Ok(entries.into_iter().map(map_bond_entry).collect())
 }
 
@@ -117,7 +121,8 @@ pub fn get_daily_journal_by_date(
     entry_date: String,
 ) -> Result<Option<DailyJournalItem>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let journal = mind_repo::get_daily_journal_by_date(&conn, &entry_date).map_err(|e| e.to_string())?;
+    let journal =
+        mind_repo::get_daily_journal_by_date(&conn, &entry_date).map_err(|e| e.to_string())?;
     Ok(journal.map(map_daily_journal))
 }
 
@@ -127,8 +132,8 @@ pub fn get_recent_daily_journals(
     limit: Option<i64>,
 ) -> Result<Vec<DailyJournalItem>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let journals =
-        mind_repo::list_recent_daily_journals(&conn, limit.unwrap_or(20)).map_err(|e| e.to_string())?;
+    let journals = mind_repo::list_recent_daily_journals(&conn, limit.unwrap_or(20))
+        .map_err(|e| e.to_string())?;
     Ok(journals.into_iter().map(map_daily_journal).collect())
 }
 

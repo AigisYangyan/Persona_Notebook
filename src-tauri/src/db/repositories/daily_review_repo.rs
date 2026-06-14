@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result, params};
+use rusqlite::{params, Connection, Result};
 
 use super::ledger_repo;
 
@@ -113,9 +113,11 @@ pub fn recalculate_review(
     let is_analyzed = ledger_repo::has_active_entries_for_date(conn, date)?;
     let existing = get_review(conn, date)?;
     let summary_text = if is_analyzed {
-        summary_override
-            .map(str::to_owned)
-            .or_else(|| existing.as_ref().and_then(|review| review.summary_text.clone()))
+        summary_override.map(str::to_owned).or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|review| review.summary_text.clone())
+        })
     } else {
         None
     };
@@ -138,14 +140,16 @@ pub fn get_flags_in_range(
     let mut stmt = conn.prepare(
         "SELECT date, is_analyzed
          FROM daily_reviews
-         WHERE date BETWEEN ?1 AND ?2"
+         WHERE date BETWEEN ?1 AND ?2",
     )?;
-    let flags = stmt.query_map(params![start_date, end_date], |row| {
-        Ok(DailyReviewFlag {
-            date: row.get(0)?,
-            is_analyzed: row.get::<_, i32>(1)? != 0,
-        })
-    })?.collect::<Result<Vec<_>, _>>()?;
+    let flags = stmt
+        .query_map(params![start_date, end_date], |row| {
+            Ok(DailyReviewFlag {
+                date: row.get(0)?,
+                is_analyzed: row.get::<_, i32>(1)? != 0,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(flags)
 }
 

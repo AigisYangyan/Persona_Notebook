@@ -80,15 +80,17 @@ export interface StreakInfo {
 
 export interface AppSettings {
   scoring_engine: string;
-  api_base_url: string;
-  api_model: string;
+  deepseek_base_url: string;
+  deepseek_flash_model: string;
+  deepseek_pro_model: string;
   api_key_configured: boolean;
 }
 
 export interface GeneralSettingsPayload {
   scoring_engine: string;
-  api_base_url: string;
-  api_model: string;
+  deepseek_base_url: string;
+  deepseek_flash_model: string;
+  deepseek_pro_model: string;
 }
 
 export interface CalendarOverviewItem {
@@ -735,8 +737,9 @@ export async function saveGeneralSettings(
 ): Promise<void> {
   return invoke("save_general_settings", {
     scoringEngine: settings.scoring_engine,
-    apiBaseUrl: settings.api_base_url,
-    apiModel: settings.api_model,
+    deepseekBaseUrl: settings.deepseek_base_url,
+    deepseekFlashModel: settings.deepseek_flash_model,
+    deepseekProModel: settings.deepseek_pro_model,
   });
 }
 

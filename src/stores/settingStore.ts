@@ -12,16 +12,18 @@ export type ScoringEngine = "rules_api";
 
 export interface AppSettings {
   scoringEngine: ScoringEngine;
-  apiBaseUrl: string;
-  apiModel: string;
+  deepseekBaseUrl: string;
+  deepseekFlashModel: string;
+  deepseekProModel: string;
   apiKeyConfigured: boolean;
 }
 
 export const useSettingStore = defineStore("setting", () => {
   const settings = ref<AppSettings>({
     scoringEngine: "rules_api",
-    apiBaseUrl: "",
-    apiModel: "gpt-4o-mini",
+    deepseekBaseUrl: "https://api.deepseek.com/v1",
+    deepseekFlashModel: "",
+    deepseekProModel: "",
     apiKeyConfigured: false,
   });
 
@@ -75,11 +77,12 @@ export const useSettingStore = defineStore("setting", () => {
     };
   }
 
-  function updateApiConfig(baseUrl: string, model: string) {
+  function updateApiConfig(baseUrl: string, flashModel: string, proModel: string) {
     settings.value = {
       ...settings.value,
-      apiBaseUrl: baseUrl,
-      apiModel: model,
+      deepseekBaseUrl: baseUrl,
+      deepseekFlashModel: flashModel,
+      deepseekProModel: proModel,
     };
   }
 

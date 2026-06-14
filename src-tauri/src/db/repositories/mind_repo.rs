@@ -114,7 +114,10 @@ pub fn delete_bond_entry(conn: &Connection, entry_id: i64) -> Result<()> {
     Ok(())
 }
 
-pub fn get_daily_journal_by_date(conn: &Connection, entry_date: &str) -> Result<Option<DailyJournal>> {
+pub fn get_daily_journal_by_date(
+    conn: &Connection,
+    entry_date: &str,
+) -> Result<Option<DailyJournal>> {
     conn.query_row(
         "SELECT
             id,
@@ -171,7 +174,10 @@ pub fn save_daily_journal(
 }
 
 pub fn delete_daily_journal(conn: &Connection, journal_id: i64) -> Result<()> {
-    conn.execute("DELETE FROM daily_journals WHERE id = ?1", params![journal_id])?;
+    conn.execute(
+        "DELETE FROM daily_journals WHERE id = ?1",
+        params![journal_id],
+    )?;
     Ok(())
 }
 
@@ -259,7 +265,8 @@ mod tests {
 
         let person = save_bond_person(&conn, None, "Alice", "friend", 7, "").expect("person");
         save_bond_entry(&conn, person.id, "2026-06-13", "First", "A").expect("first entry");
-        let second = save_bond_entry(&conn, person.id, "2026-06-13", "Updated", "B").expect("second entry");
+        let second =
+            save_bond_entry(&conn, person.id, "2026-06-13", "Updated", "B").expect("second entry");
         let entries = list_bond_entries_by_person(&conn, person.id).expect("entries");
 
         assert_eq!(entries.len(), 1);
@@ -286,7 +293,8 @@ mod tests {
         run_migrations(&conn).expect("migrate");
 
         save_daily_journal(&conn, "2026-06-13", "One", "alpha", "calm").expect("first");
-        let second = save_daily_journal(&conn, "2026-06-13", "Two", "beta", "focused").expect("second");
+        let second =
+            save_daily_journal(&conn, "2026-06-13", "Two", "beta", "focused").expect("second");
         let fetched = get_daily_journal_by_date(&conn, "2026-06-13")
             .expect("fetch")
             .expect("journal");

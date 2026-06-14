@@ -1,10 +1,10 @@
-pub mod record_repo;
-pub mod ledger_repo;
-pub mod dimension_repo;
-pub mod rule_repo;
-pub mod setting_repo;
-pub mod daily_review_repo;
 pub mod api_run_repo;
-pub mod plan_repo;
+pub mod daily_review_repo;
+pub mod dimension_repo;
+pub mod ledger_repo;
 pub mod mind_repo;
 pub mod personal_memory_repo;
+pub mod plan_repo;
+pub mod record_repo;
+pub mod rule_repo;
+pub mod setting_repo;

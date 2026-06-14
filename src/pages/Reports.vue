@@ -5,6 +5,7 @@ import { useInsightStore } from "@/stores/insightStore";
 import type { InsightPeriodType, InsightReport } from "@/api/client/tauriCommands";
 import { getTodayStr } from "@/utils/date";
 import { normalizeInsightPeriod, reportKindLabel } from "@/features/insights/periods";
+import { coerceInsightList, coerceInsightText } from "@/features/insights/display";
 
 const insightStore = useInsightStore();
 const message = useMessage();
@@ -84,20 +85,11 @@ function readReportPayload(report: InsightReport | null): Record<string, unknown
 }
 
 function readList(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.map((item) => (typeof item === "string" ? item.trim() : JSON.stringify(item))).filter(Boolean);
-  }
-  return typeof value === "string" && value.trim() ? [value.trim()] : [];
+  return coerceInsightList(value);
 }
 
 function readText(value: unknown): string {
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
-  }
-  if (Array.isArray(value) && value.length > 0) {
-    return readList(value).join("；");
-  }
-  return "";
+  return coerceInsightText(value);
 }
 
 function buildReportText(input: {

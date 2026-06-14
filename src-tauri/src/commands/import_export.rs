@@ -275,8 +275,9 @@ struct ExportCloseoutRun {
 #[derive(Serialize)]
 struct ExportSettingsPublic {
     scoring_engine: String,
-    api_base_url: String,
-    api_model: String,
+    deepseek_base_url: String,
+    deepseek_flash_model: String,
+    deepseek_pro_model: String,
     api_key_configured: bool,
 }
 
@@ -469,28 +470,30 @@ fn export_records(conn: &Connection) -> Result<Vec<ExportRecord>, String> {
 
     let rows = stmt
         .query_map([], |row| {
-        Ok(ExportRecord {
-            id: row.get(0)?,
-            date: row.get(1)?,
-            title: row.get(2)?,
-            minutes: row.get(3)?,
-            difficulty_star: row.get(4)?,
-            parent_id: row.get(5)?,
-            is_completed: row.get(6)?,
-            completed_at: row.get(7)?,
-            elapsed_seconds: row.get(8)?,
-            timer_mode: row.get(9)?,
-            countdown_target_seconds: row.get(10)?,
-            timer_started_at: row.get(11)?,
+            Ok(ExportRecord {
+                id: row.get(0)?,
+                date: row.get(1)?,
+                title: row.get(2)?,
+                minutes: row.get(3)?,
+                difficulty_star: row.get(4)?,
+                parent_id: row.get(5)?,
+                is_completed: row.get(6)?,
+                completed_at: row.get(7)?,
+                elapsed_seconds: row.get(8)?,
+                timer_mode: row.get(9)?,
+                countdown_target_seconds: row.get(10)?,
+                timer_started_at: row.get(11)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
-fn export_record_timer_sessions(conn: &Connection) -> Result<Vec<ExportRecordTimerSession>, String> {
+fn export_record_timer_sessions(
+    conn: &Connection,
+) -> Result<Vec<ExportRecordTimerSession>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT
@@ -506,17 +509,17 @@ fn export_record_timer_sessions(conn: &Connection) -> Result<Vec<ExportRecordTim
 
     let rows = stmt
         .query_map([], |row| {
-        Ok(ExportRecordTimerSession {
-            id: row.get(0)?,
-            record_id: row.get(1)?,
-            started_at: row.get(2)?,
-            ended_at: row.get(3)?,
-            duration_seconds: row.get(4)?,
+            Ok(ExportRecordTimerSession {
+                id: row.get(0)?,
+                record_id: row.get(1)?,
+                started_at: row.get(2)?,
+                ended_at: row.get(3)?,
+                duration_seconds: row.get(4)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
@@ -542,23 +545,23 @@ fn export_ledger(conn: &Connection) -> Result<Vec<ExportLedgerEntry>, String> {
 
     let rows = stmt
         .query_map([], |row| {
-        Ok(ExportLedgerEntry {
-            id: row.get(0)?,
-            date: row.get(1)?,
-            record_id: row.get(2)?,
-            dimension_key: row.get(3)?,
-            change_value: row.get(4)?,
-            source_title: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
-            reason: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
-            confidence: row.get(7)?,
-            engine: row.get(8)?,
-            is_rollback: row.get(9)?,
-            rollback_ref: row.get(10)?,
+            Ok(ExportLedgerEntry {
+                id: row.get(0)?,
+                date: row.get(1)?,
+                record_id: row.get(2)?,
+                dimension_key: row.get(3)?,
+                change_value: row.get(4)?,
+                source_title: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                reason: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                confidence: row.get(7)?,
+                engine: row.get(8)?,
+                is_rollback: row.get(9)?,
+                rollback_ref: row.get(10)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
@@ -581,20 +584,20 @@ fn export_plan_cycles(conn: &Connection) -> Result<Vec<ExportPlanCycle>, String>
 
     let rows = stmt
         .query_map([], |row| {
-        Ok(ExportPlanCycle {
-            id: row.get(0)?,
-            period_type: row.get(1)?,
-            start_date: row.get(2)?,
-            end_date: row.get(3)?,
-            title: row.get(4)?,
-            summary: row.get(5)?,
-            ai_summary: row.get(6)?,
-            last_ai_run_at: row.get(7)?,
+            Ok(ExportPlanCycle {
+                id: row.get(0)?,
+                period_type: row.get(1)?,
+                start_date: row.get(2)?,
+                end_date: row.get(3)?,
+                title: row.get(4)?,
+                summary: row.get(5)?,
+                ai_summary: row.get(6)?,
+                last_ai_run_at: row.get(7)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
@@ -618,21 +621,21 @@ fn export_plan_items(conn: &Connection) -> Result<Vec<ExportPlanItem>, String> {
 
     let rows = stmt
         .query_map([], |row| {
-        Ok(ExportPlanItem {
-            id: row.get(0)?,
-            cycle_id: row.get(1)?,
-            title: row.get(2)?,
-            description: row.get(3)?,
-            dimension_key: row.get(4)?,
-            progress_percent: row.get(5)?,
-            ai_comment: row.get(6)?,
-            sort_order: row.get(7)?,
-            is_completed: row.get(8)?,
+            Ok(ExportPlanItem {
+                id: row.get(0)?,
+                cycle_id: row.get(1)?,
+                title: row.get(2)?,
+                description: row.get(3)?,
+                dimension_key: row.get(4)?,
+                progress_percent: row.get(5)?,
+                ai_comment: row.get(6)?,
+                sort_order: row.get(7)?,
+                is_completed: row.get(8)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
@@ -657,22 +660,22 @@ fn export_plan_ai_sessions(conn: &Connection) -> Result<Vec<ExportPlanAiSession>
 
     let rows = stmt
         .query_map([], |row| {
-        Ok(ExportPlanAiSession {
-            id: row.get(0)?,
-            cycle_id: row.get(1)?,
-            status: row.get(2)?,
-            request_payload: row.get(3)?,
-            response_payload: row.get(4)?,
-            questions_json: row.get(5)?,
-            answers_json: row.get(6)?,
-            proposal_json: row.get(7)?,
-            created_at: row.get(8)?,
-            updated_at: row.get(9)?,
+            Ok(ExportPlanAiSession {
+                id: row.get(0)?,
+                cycle_id: row.get(1)?,
+                status: row.get(2)?,
+                request_payload: row.get(3)?,
+                response_payload: row.get(4)?,
+                questions_json: row.get(5)?,
+                answers_json: row.get(6)?,
+                proposal_json: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
@@ -694,19 +697,19 @@ fn export_bond_people(conn: &Connection) -> Result<Vec<ExportBondPerson>, String
 
     let rows = stmt
         .query_map([], |row| {
-        Ok(ExportBondPerson {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            relation_label: row.get(2)?,
-            score: row.get(3)?,
-            note: row.get(4)?,
-            created_at: row.get(5)?,
-            updated_at: row.get(6)?,
+            Ok(ExportBondPerson {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                relation_label: row.get(2)?,
+                score: row.get(3)?,
+                note: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
@@ -728,19 +731,19 @@ fn export_bond_entries(conn: &Connection) -> Result<Vec<ExportBondEntry>, String
 
     let rows = stmt
         .query_map([], |row| {
-        Ok(ExportBondEntry {
-            id: row.get(0)?,
-            person_id: row.get(1)?,
-            entry_date: row.get(2)?,
-            title: row.get(3)?,
-            content: row.get(4)?,
-            created_at: row.get(5)?,
-            updated_at: row.get(6)?,
+            Ok(ExportBondEntry {
+                id: row.get(0)?,
+                person_id: row.get(1)?,
+                entry_date: row.get(2)?,
+                title: row.get(3)?,
+                content: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
@@ -762,23 +765,25 @@ fn export_daily_journals(conn: &Connection) -> Result<Vec<ExportDailyJournal>, S
 
     let rows = stmt
         .query_map([], |row| {
-        Ok(ExportDailyJournal {
-            id: row.get(0)?,
-            entry_date: row.get(1)?,
-            title: row.get(2)?,
-            content: row.get(3)?,
-            mood: row.get(4)?,
-            created_at: row.get(5)?,
-            updated_at: row.get(6)?,
+            Ok(ExportDailyJournal {
+                id: row.get(0)?,
+                entry_date: row.get(1)?,
+                title: row.get(2)?,
+                content: row.get(3)?,
+                mood: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
-fn export_personal_memory_items(conn: &Connection) -> Result<Vec<ExportPersonalMemoryItem>, String> {
+fn export_personal_memory_items(
+    conn: &Connection,
+) -> Result<Vec<ExportPersonalMemoryItem>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT
@@ -804,31 +809,33 @@ fn export_personal_memory_items(conn: &Connection) -> Result<Vec<ExportPersonalM
 
     let rows = stmt
         .query_map([], |row| {
-        Ok(ExportPersonalMemoryItem {
-            id: row.get(0)?,
-            memory_type: row.get(1)?,
-            title: row.get(2)?,
-            summary: row.get(3)?,
-            detail: row.get(4)?,
-            tags_json: row.get(5)?,
-            importance: row.get(6)?,
-            confidence: row.get(7)?,
-            first_seen_date: row.get(8)?,
-            last_seen_date: row.get(9)?,
-            status: row.get(10)?,
-            supersedes_id: row.get(11)?,
-            created_by: row.get(12)?,
-            created_at: row.get(13)?,
-            updated_at: row.get(14)?,
+            Ok(ExportPersonalMemoryItem {
+                id: row.get(0)?,
+                memory_type: row.get(1)?,
+                title: row.get(2)?,
+                summary: row.get(3)?,
+                detail: row.get(4)?,
+                tags_json: row.get(5)?,
+                importance: row.get(6)?,
+                confidence: row.get(7)?,
+                first_seen_date: row.get(8)?,
+                last_seen_date: row.get(9)?,
+                status: row.get(10)?,
+                supersedes_id: row.get(11)?,
+                created_by: row.get(12)?,
+                created_at: row.get(13)?,
+                updated_at: row.get(14)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
-fn export_personal_memory_sources(conn: &Connection) -> Result<Vec<ExportPersonalMemorySource>, String> {
+fn export_personal_memory_sources(
+    conn: &Connection,
+) -> Result<Vec<ExportPersonalMemorySource>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT
@@ -847,24 +854,26 @@ fn export_personal_memory_sources(conn: &Connection) -> Result<Vec<ExportPersona
 
     let rows = stmt
         .query_map([], |row| {
-        Ok(ExportPersonalMemorySource {
-            id: row.get(0)?,
-            memory_id: row.get(1)?,
-            source_type: row.get(2)?,
-            source_id: row.get(3)?,
-            source_date: row.get(4)?,
-            evidence_id: row.get(5)?,
-            excerpt: row.get(6)?,
-            created_at: row.get(7)?,
+            Ok(ExportPersonalMemorySource {
+                id: row.get(0)?,
+                memory_id: row.get(1)?,
+                source_type: row.get(2)?,
+                source_id: row.get(3)?,
+                source_date: row.get(4)?,
+                evidence_id: row.get(5)?,
+                excerpt: row.get(6)?,
+                created_at: row.get(7)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
-fn export_personal_memory_events(conn: &Connection) -> Result<Vec<ExportPersonalMemoryEvent>, String> {
+fn export_personal_memory_events(
+    conn: &Connection,
+) -> Result<Vec<ExportPersonalMemoryEvent>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT
@@ -880,21 +889,23 @@ fn export_personal_memory_events(conn: &Connection) -> Result<Vec<ExportPersonal
 
     let rows = stmt
         .query_map([], |row| {
-        Ok(ExportPersonalMemoryEvent {
-            id: row.get(0)?,
-            memory_id: row.get(1)?,
-            event_type: row.get(2)?,
-            payload_json: row.get(3)?,
-            created_at: row.get(4)?,
+            Ok(ExportPersonalMemoryEvent {
+                id: row.get(0)?,
+                memory_id: row.get(1)?,
+                event_type: row.get(2)?,
+                payload_json: row.get(3)?,
+                created_at: row.get(4)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
-fn export_personal_memory_patch_runs(conn: &Connection) -> Result<Vec<ExportPersonalMemoryPatchRun>, String> {
+fn export_personal_memory_patch_runs(
+    conn: &Connection,
+) -> Result<Vec<ExportPersonalMemoryPatchRun>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT
@@ -915,26 +926,28 @@ fn export_personal_memory_patch_runs(conn: &Connection) -> Result<Vec<ExportPers
 
     let rows = stmt
         .query_map([], |row| {
-        Ok(ExportPersonalMemoryPatchRun {
-            id: row.get(0)?,
-            source_context_id: row.get(1)?,
-            patch_json: row.get(2)?,
-            validation_status: row.get(3)?,
-            apply_status: row.get(4)?,
-            rejected_reason: row.get(5)?,
-            applied_operations: row.get(6)?,
-            rejected_operations: row.get(7)?,
-            created_at: row.get(8)?,
-            updated_at: row.get(9)?,
+            Ok(ExportPersonalMemoryPatchRun {
+                id: row.get(0)?,
+                source_context_id: row.get(1)?,
+                patch_json: row.get(2)?,
+                validation_status: row.get(3)?,
+                apply_status: row.get(4)?,
+                rejected_reason: row.get(5)?,
+                applied_operations: row.get(6)?,
+                rejected_operations: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
-fn export_insight_context_snapshots(conn: &Connection) -> Result<Vec<ExportInsightContextSnapshot>, String> {
+fn export_insight_context_snapshots(
+    conn: &Connection,
+) -> Result<Vec<ExportInsightContextSnapshot>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, report_kind, period_type, start_date, end_date, context_json, created_at
@@ -1076,12 +1089,15 @@ fn export_settings_public(conn: &Connection) -> Result<ExportSettingsPublic, Str
     let scoring_engine = setting_repo::get_setting(conn, "scoring_engine")
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| "rules_api".to_string());
-    let api_base_url = setting_repo::get_setting(conn, "api_base_url")
+    let deepseek_base_url = setting_repo::get_setting(conn, "deepseek_base_url")
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| "https://api.deepseek.com/v1".to_string());
+    let deepseek_flash_model = setting_repo::get_setting(conn, "deepseek_flash_model")
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
-    let api_model = setting_repo::get_setting(conn, "api_model")
+    let deepseek_pro_model = setting_repo::get_setting(conn, "deepseek_pro_model")
         .map_err(|e| e.to_string())?
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+        .unwrap_or_default();
     let api_key_configured = setting_repo::get_setting(conn, "api_key")
         .map_err(|e| e.to_string())?
         .map(|value| !value.trim().is_empty())
@@ -1089,8 +1105,9 @@ fn export_settings_public(conn: &Connection) -> Result<ExportSettingsPublic, Str
 
     Ok(ExportSettingsPublic {
         scoring_engine,
-        api_base_url,
-        api_model,
+        deepseek_base_url,
+        deepseek_flash_model,
+        deepseek_pro_model,
         api_key_configured,
     })
 }
@@ -1113,8 +1130,12 @@ mod tests {
     fn export_payload_hides_api_key_and_includes_profile() {
         let conn = Connection::open_in_memory().expect("open db");
         run_migrations(&conn).expect("migrate");
-        setting_repo::set_setting(&conn, "api_base_url", "https://api.example.com").expect("base url");
-        setting_repo::set_setting(&conn, "api_model", "gpt-4o-mini").expect("model");
+        setting_repo::set_setting(&conn, "deepseek_base_url", "https://api.deepseek.com/v1")
+            .expect("base url");
+        setting_repo::set_setting(&conn, "deepseek_flash_model", "deepseek-chat")
+            .expect("flash model");
+        setting_repo::set_setting(&conn, "deepseek_pro_model", "deepseek-reasoner")
+            .expect("pro model");
         setting_repo::set_setting(&conn, "api_key", "secret-value").expect("key");
         personal_memory_repo::save_personal_profile(
             &conn,
@@ -1132,6 +1153,14 @@ mod tests {
 
         assert_eq!(payload.personal_profile.birthday, "1998-01-02");
         assert!(payload.settings_public.api_key_configured);
+        assert_eq!(
+            payload.settings_public.deepseek_flash_model,
+            "deepseek-chat"
+        );
+        assert_eq!(
+            payload.settings_public.deepseek_pro_model,
+            "deepseek-reasoner"
+        );
 
         let json = serde_json::to_string(&payload).expect("serialize");
         assert!(!json.contains("secret-value"));

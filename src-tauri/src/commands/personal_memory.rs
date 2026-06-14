@@ -38,7 +38,9 @@ pub fn save_personal_profile(
 }
 
 #[tauri::command]
-pub fn get_personal_memory_overview(state: State<DbState>) -> Result<PersonalMemoryOverview, String> {
+pub fn get_personal_memory_overview(
+    state: State<DbState>,
+) -> Result<PersonalMemoryOverview, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     personal_memory_repo::get_personal_memory_overview(&conn)
 }
@@ -79,7 +81,8 @@ pub fn apply_personal_memory_patch(
     source_context_id: String,
 ) -> Result<PersonalMemoryPatchApplyResult, String> {
     let mut conn = state.0.lock().map_err(|e| e.to_string())?;
-    let result = personal_memory_repo::apply_memory_patch(&mut conn, &patch_json, &source_context_id)?;
+    let result =
+        personal_memory_repo::apply_memory_patch(&mut conn, &patch_json, &source_context_id)?;
     let rag_memory_dir = app_data_dir.0.join("rag_memory");
     rag_memory_service::write_patch_run_file(
         &rag_memory_dir,
@@ -105,6 +108,7 @@ pub fn rebuild_rag_memory_files(
     app_data_dir: State<AppDataDirState>,
 ) -> Result<String, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let manifest = rag_memory_service::rebuild_rag_memory_files(&conn, &app_data_dir.0.join("rag_memory"))?;
+    let manifest =
+        rag_memory_service::rebuild_rag_memory_files(&conn, &app_data_dir.0.join("rag_memory"))?;
     serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())
 }

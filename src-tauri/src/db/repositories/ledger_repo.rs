@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result, params};
+use rusqlite::{params, Connection, Result};
 
 #[derive(Debug, Clone)]
 pub struct LedgerEntry {
@@ -28,7 +28,16 @@ pub fn insert_ledger(
         "INSERT INTO stat_ledger
          (date, record_id, dimension_key, change_value, source_title, reason, confidence, engine)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![date, record_id, dimension_key, change_value, source_title, reason, confidence, engine],
+        params![
+            date,
+            record_id,
+            dimension_key,
+            change_value,
+            source_title,
+            reason,
+            confidence,
+            engine
+        ],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -38,19 +47,21 @@ pub fn get_ledger_by_date(conn: &Connection, date: &str) -> Result<Vec<LedgerEnt
         "SELECT id, date, record_id, dimension_key, change_value, source_title, reason, confidence, engine
          FROM stat_ledger WHERE date = ?1 AND is_rollback = 0 ORDER BY created_at"
     )?;
-    let entries = stmt.query_map(params![date], |row| {
-        Ok(LedgerEntry {
-            id: row.get(0)?,
-            date: row.get(1)?,
-            record_id: row.get(2)?,
-            dimension_key: row.get(3)?,
-            change_value: row.get(4)?,
-            source_title: row.get(5)?,
-            reason: row.get(6)?,
-            confidence: row.get(7)?,
-            engine: row.get(8)?,
-        })
-    })?.collect::<Result<Vec<_>, _>>()?;
+    let entries = stmt
+        .query_map(params![date], |row| {
+            Ok(LedgerEntry {
+                id: row.get(0)?,
+                date: row.get(1)?,
+                record_id: row.get(2)?,
+                dimension_key: row.get(3)?,
+                change_value: row.get(4)?,
+                source_title: row.get(5)?,
+                reason: row.get(6)?,
+                confidence: row.get(7)?,
+                engine: row.get(8)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(entries)
 }
 
@@ -66,9 +77,11 @@ pub fn get_dimension_totals(conn: &Connection) -> Result<Vec<(String, i32)>> {
     let mut stmt = conn.prepare(
         "SELECT dimension_key, SUM(change_value) FROM stat_ledger WHERE is_rollback = 0 GROUP BY dimension_key"
     )?;
-    let totals = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
-    })?.collect::<Result<Vec<_>, _>>()?;
+    let totals = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(totals)
 }
 
@@ -77,11 +90,13 @@ pub fn get_totals_by_date(conn: &Connection, date: &str) -> Result<Vec<(String, 
         "SELECT dimension_key, SUM(change_value)
          FROM stat_ledger
          WHERE date = ?1 AND is_rollback = 0
-         GROUP BY dimension_key"
+         GROUP BY dimension_key",
     )?;
-    let totals = stmt.query_map(params![date], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
-    })?.collect::<Result<Vec<_>, _>>()?;
+    let totals = stmt
+        .query_map(params![date], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(totals)
 }
 
@@ -95,7 +110,7 @@ pub fn get_totals_in_range(
          FROM stat_ledger
          WHERE date BETWEEN ?1 AND ?2
            AND is_rollback = 0
-         GROUP BY dimension_key"
+         GROUP BY dimension_key",
     )?;
     let totals = stmt
         .query_map(params![start_date, end_date], |row| {
@@ -110,7 +125,7 @@ pub fn has_active_entries_for_date(conn: &Connection, date: &str) -> Result<bool
         "SELECT EXISTS(
             SELECT 1 FROM stat_ledger
             WHERE date = ?1 AND is_rollback = 0
-         )"
+         )",
     )?;
     stmt.query_row(params![date], |row| row.get(0))
 }
@@ -126,9 +141,8 @@ pub fn get_ledger_date(conn: &Connection, ledger_id: i64) -> Result<Option<Strin
 }
 
 pub fn has_ledger_for_date(conn: &Connection, date: &str) -> Result<bool> {
-    let mut stmt = conn.prepare(
-        "SELECT 1 FROM stat_ledger WHERE date = ?1 AND is_rollback = 0 LIMIT 1"
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT 1 FROM stat_ledger WHERE date = ?1 AND is_rollback = 0 LIMIT 1")?;
     let exists = stmt.exists(params![date])?;
     Ok(exists)
 }

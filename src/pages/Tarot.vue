@@ -4,6 +4,7 @@ import { NButton, NEmpty, NModal, NPopconfirm, useMessage } from "naive-ui";
 import { useInsightStore } from "@/stores/insightStore";
 import type { InsightReport } from "@/api/client/tauriCommands";
 import { getTodayStr } from "@/utils/date";
+import { coerceInsightList, coerceInsightText } from "@/features/insights/display";
 
 const insightStore = useInsightStore();
 const message = useMessage();
@@ -70,14 +71,11 @@ function readReportPayload(report: InsightReport | null): Record<string, unknown
 }
 
 function readString(value: unknown, fallback = ""): string {
-  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+  return coerceInsightText(value, fallback);
 }
 
 function readList(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.map((item) => String(item).trim()).filter(Boolean);
-  }
-  return typeof value === "string" && value.trim() ? [value.trim()] : [];
+  return coerceInsightList(value);
 }
 
 function buildTarotText(input: {

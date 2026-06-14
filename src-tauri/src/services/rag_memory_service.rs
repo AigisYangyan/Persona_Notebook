@@ -34,7 +34,11 @@ pub fn rebuild_rag_memory_files(
         .map(|item| serde_json::to_string(item).map_err(|e| e.to_string()))
         .collect::<Result<Vec<_>, _>>()?
         .join("\n");
-    fs::write(rag_memory_dir.join("memory_items.jsonl"), memory_items_jsonl).map_err(|e| e.to_string())?;
+    fs::write(
+        rag_memory_dir.join("memory_items.jsonl"),
+        memory_items_jsonl,
+    )
+    .map_err(|e| e.to_string())?;
 
     let manifest = RagMemoryManifest {
         schema_version: "1.0".into(),
@@ -124,10 +128,7 @@ pub fn export_rag_memory_snapshot(
     serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())
 }
 
-pub fn write_profile_file(
-    rag_memory_dir: &Path,
-    profile: &PersonalProfile,
-) -> Result<(), String> {
+pub fn write_profile_file(rag_memory_dir: &Path, profile: &PersonalProfile) -> Result<(), String> {
     ensure_rag_memory_dir(rag_memory_dir)?;
     fs::write(
         rag_memory_dir.join("profile.json"),
@@ -143,7 +144,9 @@ pub fn write_patch_run_file(
 ) -> Result<PathBuf, String> {
     ensure_rag_memory_dir(rag_memory_dir)?;
     let safe_name = created_at.replace([':', ' '], "-");
-    let path = rag_memory_dir.join("patch_runs").join(format!("{safe_name}.json"));
+    let path = rag_memory_dir
+        .join("patch_runs")
+        .join(format!("{safe_name}.json"));
     fs::write(&path, patch_json).map_err(|e| e.to_string())?;
     Ok(path)
 }

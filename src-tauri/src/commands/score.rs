@@ -170,7 +170,9 @@ pub fn confirm_score_preview(
 }
 
 fn has_positive_changes(items: &[ScorePreviewItem]) -> bool {
-    items.iter().any(|item| item.changes.iter().any(|change| change.change_value > 0))
+    items
+        .iter()
+        .any(|item| item.changes.iter().any(|change| change.change_value > 0))
 }
 
 fn get_time_base_score(minutes: i32) -> i32 {
@@ -229,10 +231,7 @@ fn apply_daily_caps(
             }
         }
 
-        normalized_items.push(ScorePreviewItem {
-            changes,
-            ..item
-        });
+        normalized_items.push(ScorePreviewItem { changes, ..item });
     }
 
     Ok(normalized_items)

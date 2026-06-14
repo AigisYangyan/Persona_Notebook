@@ -9,8 +9,9 @@ export function mapSettingsFromBackend(
 ): StoreAppSettings {
   return {
     scoringEngine: "rules_api",
-    apiBaseUrl: settings.api_base_url || "",
-    apiModel: settings.api_model || "gpt-4o-mini",
+    deepseekBaseUrl: settings.deepseek_base_url || "https://api.deepseek.com/v1",
+    deepseekFlashModel: settings.deepseek_flash_model || settings.deepseek_pro_model || "",
+    deepseekProModel: settings.deepseek_pro_model || settings.deepseek_flash_model || "",
     apiKeyConfigured: settings.api_key_configured,
   };
 }
@@ -20,7 +21,8 @@ export function toGeneralSettingsPayload(
 ): GeneralSettingsPayload {
   return {
     scoring_engine: settings.scoringEngine,
-    api_base_url: settings.apiBaseUrl,
-    api_model: settings.apiModel,
+    deepseek_base_url: settings.deepseekBaseUrl,
+    deepseek_flash_model: settings.deepseekFlashModel,
+    deepseek_pro_model: settings.deepseekProModel,
   };
 }

@@ -90,6 +90,9 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
             error_message TEXT,
             latency_ms    INTEGER,
             engine_name   TEXT NOT NULL DEFAULT 'openai',
+            task_kind     TEXT NOT NULL DEFAULT 'unknown',
+            model_tier    TEXT NOT NULL DEFAULT 'legacy',
+            fallback_used INTEGER NOT NULL DEFAULT 0,
             created_at    TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
         );
 
@@ -299,16 +302,32 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     )?;
 
     ensure_record_columns(conn)?;
+    ensure_api_run_columns(conn)?;
     init_default_data(conn)?;
     Ok(())
 }
 
 fn ensure_record_columns(conn: &Connection) -> Result<()> {
     ensure_column(conn, "records", "parent_id", "parent_id INTEGER")?;
-    ensure_column(conn, "records", "is_completed", "is_completed INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(
+        conn,
+        "records",
+        "is_completed",
+        "is_completed INTEGER NOT NULL DEFAULT 0",
+    )?;
     ensure_column(conn, "records", "completed_at", "completed_at TEXT")?;
-    ensure_column(conn, "records", "elapsed_seconds", "elapsed_seconds INTEGER NOT NULL DEFAULT 0")?;
-    ensure_column(conn, "records", "timer_mode", "timer_mode TEXT NOT NULL DEFAULT 'stopwatch'")?;
+    ensure_column(
+        conn,
+        "records",
+        "elapsed_seconds",
+        "elapsed_seconds INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        conn,
+        "records",
+        "timer_mode",
+        "timer_mode TEXT NOT NULL DEFAULT 'stopwatch'",
+    )?;
     ensure_column(
         conn,
         "records",
@@ -330,6 +349,28 @@ fn ensure_record_columns(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_records_parent ON records(parent_id);
         CREATE INDEX IF NOT EXISTS idx_records_timer_started ON records(timer_started_at);
         ",
+    )?;
+    Ok(())
+}
+
+fn ensure_api_run_columns(conn: &Connection) -> Result<()> {
+    ensure_column(
+        conn,
+        "api_runs",
+        "task_kind",
+        "task_kind TEXT NOT NULL DEFAULT 'unknown'",
+    )?;
+    ensure_column(
+        conn,
+        "api_runs",
+        "model_tier",
+        "model_tier TEXT NOT NULL DEFAULT 'legacy'",
+    )?;
+    ensure_column(
+        conn,
+        "api_runs",
+        "fallback_used",
+        "fallback_used INTEGER NOT NULL DEFAULT 0",
     )?;
     Ok(())
 }
@@ -377,6 +418,9 @@ fn init_default_data(conn: &Connection) -> Result<()> {
         ('scoring_engine', 'rules_api', 'string', '评分引擎: rules_api'),
         ('api_base_url', '', 'string', 'API 基础地址'),
         ('api_model', 'gpt-4o-mini', 'string', '使用的模型名称'),
+        ('deepseek_base_url', 'https://api.deepseek.com/v1', 'string', 'DeepSeek 基础地址'),
+        ('deepseek_flash_model', '', 'string', 'DeepSeek flash 模型名称'),
+        ('deepseek_pro_model', '', 'string', 'DeepSeek pro 模型名称'),
         ('api_key', '', 'string', 'API Key（本地存储）'),
         ('level_formula_denominator', '50', 'number', '等级公式分母'),
         ('theme', 'dark', 'string', '界面主题')",

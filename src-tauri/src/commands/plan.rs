@@ -297,8 +297,12 @@ pub async fn refresh_plan_progress(
     })
     .map_err(|e| e.to_string())?;
 
-    let response_payload =
-        api_proxy::execute_plan_api_request(&state, request_payload.clone()).await?;
+    let response_payload = api_proxy::execute_plan_api_request(
+        &state,
+        request_payload.clone(),
+        api_proxy::AiTaskKind::PlanRefresh,
+    )
+    .await?;
     let parsed = parse_plan_ai_response(&response_payload)?;
     let proposal_json = parsed
         .proposal
@@ -375,7 +379,12 @@ pub async fn submit_plan_ai_answers(
             .map_err(|e| e.to_string())?;
     }
 
-    let response_payload = api_proxy::execute_plan_api_request(&state, request_payload).await?;
+    let response_payload = api_proxy::execute_plan_api_request(
+        &state,
+        request_payload,
+        api_proxy::AiTaskKind::PlanClarification,
+    )
+    .await?;
     let parsed = parse_plan_ai_response(&response_payload)?;
     let proposal_json = parsed
         .proposal

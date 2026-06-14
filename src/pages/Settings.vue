@@ -10,8 +10,9 @@ const message = useMessage();
 const settingStore = useSettingStore();
 const personalMemoryStore = usePersonalMemoryStore();
 
-const apiBaseUrl = ref("");
-const apiModel = ref("");
+const deepseekBaseUrl = ref("");
+const deepseekFlashModel = ref("");
+const deepseekProModel = ref("");
 const apiKey = ref("");
 const savingApiConfig = ref(false);
 const savingApiKey = ref(false);
@@ -53,8 +54,9 @@ const memoryStats = computed(() => {
 
 onMounted(async () => {
   await Promise.all([settingStore.loadSettings(), personalMemoryStore.loadFoundation()]);
-  apiBaseUrl.value = settingStore.settings.apiBaseUrl;
-  apiModel.value = settingStore.settings.apiModel;
+  deepseekBaseUrl.value = settingStore.settings.deepseekBaseUrl;
+  deepseekFlashModel.value = settingStore.settings.deepseekFlashModel;
+  deepseekProModel.value = settingStore.settings.deepseekProModel;
   syncProfileForm();
 });
 
@@ -84,10 +86,14 @@ function downloadJson(filename: string, content: string) {
 async function handleSaveApiConfig() {
   savingApiConfig.value = true;
   settingStore.setEngine("rules_api");
-  settingStore.updateApiConfig(apiBaseUrl.value, apiModel.value);
+  settingStore.updateApiConfig(
+    deepseekBaseUrl.value,
+    deepseekFlashModel.value,
+    deepseekProModel.value
+  );
   try {
     await settingStore.persistGeneralSettings();
-    message.success("API 配置已保存");
+    message.success("DeepSeek 配置已保存");
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error);
     message.error(`保存失败: ${messageText}`);
@@ -254,7 +260,7 @@ async function handleImportFile(event: Event) {
     <div class="settings-grid">
       <section class="settings-section">
         <div class="cyber-section-title">
-          API CONFIGURATION<span class="sub">接口配置</span>
+          DEEPSEEK CONFIGURATION<span class="sub">DeepSeek 双档路由</span>
         </div>
         <div class="config-panel cyber-panel">
           <div class="config-status">
@@ -269,18 +275,28 @@ async function handleImportFile(event: Event) {
 
           <div class="form-grid">
             <div class="form-group">
-              <label class="form-label">Base URL</label>
-              <n-input v-model:value="apiBaseUrl" placeholder="https://api.openai.com/v1" />
+              <label class="form-label">DeepSeek Base URL</label>
+              <n-input v-model:value="deepseekBaseUrl" placeholder="https://api.deepseek.com/v1" />
             </div>
             <div class="form-group">
-              <label class="form-label">Model</label>
-              <n-input v-model:value="apiModel" placeholder="gpt-4o-mini" />
+              <label class="form-label">Flash Model</label>
+              <n-input v-model:value="deepseekFlashModel" placeholder="deepseek-chat" />
             </div>
+            <div class="form-group">
+              <label class="form-label">Pro Model</label>
+              <n-input v-model:value="deepseekProModel" placeholder="deepseek-reasoner" />
+            </div>
+          </div>
+
+          <div class="hint-panel">
+            <div class="hint-line"><strong>flash</strong> = 结构化、快、便宜，用于评分与计划刷新</div>
+            <div class="hint-line"><strong>pro</strong> = 长文、洞察更稳，用于塔罗、日报、周报、月报</div>
+            <div class="hint-line">当前固定路由：评分/计划/澄清走 flash，塔罗与各类报告走 pro</div>
           </div>
 
           <div class="form-actions">
             <button class="cyber-btn primary" :disabled="savingApiConfig" @click="handleSaveApiConfig">
-              保存 API 配置
+              保存 DeepSeek 配置
             </button>
           </div>
 
@@ -649,6 +665,25 @@ async function handleImportFile(event: Event) {
   height: 1px;
   background: linear-gradient(90deg, var(--cyber-border), transparent);
   margin: 20px 0;
+}
+
+.hint-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(0, 212, 255, 0.18);
+  background: rgba(6, 15, 38, 0.72);
+}
+
+.hint-line {
+  color: var(--cyber-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.hint-line strong {
+  color: var(--cyber-cyan);
 }
 
 .native-field {

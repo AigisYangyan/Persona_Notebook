@@ -5,6 +5,41 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tauri::State;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiModelTier {
+    Flash,
+    Pro,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiTaskKind {
+    Scoring,
+    PlanRefresh,
+    PlanClarification,
+    Tarot,
+    PeriodReportDay,
+    PeriodReportWeek,
+    PeriodReportMonth,
+}
+
+#[derive(Debug, Clone)]
+struct DeepSeekConfig {
+    base_url: String,
+    flash_model: String,
+    pro_model: String,
+    api_key: String,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedAiRoute {
+    task_kind: AiTaskKind,
+    resolved_tier: AiModelTier,
+    fallback_used: bool,
+    base_url: String,
+    model: String,
+    api_key: String,
+}
+
 #[derive(Serialize, Deserialize)]
 struct OpenAIMessage {
     role: String,
@@ -133,12 +168,52 @@ Required top-level shape:
   }
 }"#;
 
+impl AiModelTier {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Flash => "flash",
+            Self::Pro => "pro",
+        }
+    }
+}
+
+impl AiTaskKind {
+    fn model_tier(self) -> AiModelTier {
+        match self {
+            Self::Scoring | Self::PlanRefresh | Self::PlanClarification => AiModelTier::Flash,
+            Self::Tarot
+            | Self::PeriodReportDay
+            | Self::PeriodReportWeek
+            | Self::PeriodReportMonth => AiModelTier::Pro,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Scoring => "scoring",
+            Self::PlanRefresh => "plan_refresh",
+            Self::PlanClarification => "plan_clarification",
+            Self::Tarot => "tarot",
+            Self::PeriodReportDay => "period_report_day",
+            Self::PeriodReportWeek => "period_report_week",
+            Self::PeriodReportMonth => "period_report_month",
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn call_scoring_api(
     state: State<'_, DbState>,
     request_json: String,
 ) -> Result<String, String> {
-    let content = execute_api_request(&state, request_json, SCORING_SYSTEM_PROMPT, 2048).await?;
+    let content = execute_api_request(
+        &state,
+        request_json,
+        SCORING_SYSTEM_PROMPT,
+        2048,
+        AiTaskKind::Scoring,
+    )
+    .await?;
     ai_response_service::normalize_ai_json_string(&content, "scoring api")
 }
 
@@ -147,22 +222,38 @@ pub async fn call_plan_api(
     state: State<'_, DbState>,
     request_json: String,
 ) -> Result<String, String> {
-    let content = execute_api_request(&state, request_json, PLAN_SYSTEM_PROMPT, 3072).await?;
+    let content = execute_api_request(
+        &state,
+        request_json,
+        PLAN_SYSTEM_PROMPT,
+        3072,
+        AiTaskKind::PlanRefresh,
+    )
+    .await?;
     ai_response_service::normalize_ai_json_string(&content, "plan api")
 }
 
 pub async fn execute_plan_api_request(
     state: &State<'_, DbState>,
     request_json: String,
+    task_kind: AiTaskKind,
 ) -> Result<String, String> {
-    execute_api_request(state, request_json, PLAN_SYSTEM_PROMPT, 3072).await
+    execute_api_request(state, request_json, PLAN_SYSTEM_PROMPT, 3072, task_kind).await
 }
 
 pub async fn execute_daily_insight_api_request(
     state: &State<'_, DbState>,
     request_json: String,
+    task_kind: AiTaskKind,
 ) -> Result<String, String> {
-    execute_api_request(state, request_json, DAILY_INSIGHT_SYSTEM_PROMPT, 4096).await
+    execute_api_request(
+        state,
+        request_json,
+        DAILY_INSIGHT_SYSTEM_PROMPT,
+        4096,
+        task_kind,
+    )
+    .await
 }
 
 async fn execute_api_request(
@@ -170,25 +261,17 @@ async fn execute_api_request(
     request_json: String,
     system_prompt: &str,
     max_tokens: i32,
+    task_kind: AiTaskKind,
 ) -> Result<String, String> {
     let started_at = Instant::now();
     let request_date = extract_request_date(&request_json);
 
-    let (base_url, model, api_key) = {
+    let route = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let base_url = setting_repo::get_setting(&conn, "api_base_url")
-            .map_err(|e| e.to_string())?
-            .unwrap_or_else(|| "https://api.openai.com/v1".into());
-        let model = setting_repo::get_setting(&conn, "api_model")
-            .map_err(|e| e.to_string())?
-            .unwrap_or_else(|| "gpt-4o-mini".into());
-        let api_key = setting_repo::get_setting(&conn, "api_key")
-            .map_err(|e| e.to_string())?
-            .unwrap_or_default();
-        (base_url, model, api_key)
+        resolve_ai_route(&conn, task_kind)?
     };
 
-    if api_key.is_empty() {
+    if route.api_key.trim().is_empty() {
         let error_message = "API Key is not configured".to_string();
         persist_api_run(
             state,
@@ -198,14 +281,14 @@ async fn execute_api_request(
             "error",
             Some(&error_message),
             started_at.elapsed().as_millis() as i64,
-            &model,
+            &route,
         );
         return Err(error_message);
     }
 
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let url = format!("{}/chat/completions", route.base_url.trim_end_matches('/'));
     let body = OpenAIRequest {
-        model: model.clone(),
+        model: route.model.clone(),
         messages: vec![
             OpenAIMessage {
                 role: "system".into(),
@@ -223,7 +306,7 @@ async fn execute_api_request(
     let client = reqwest::Client::new();
     let response = client
         .post(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Authorization", format!("Bearer {}", route.api_key))
         .header("Content-Type", "application/json")
         .json(&body)
         .send()
@@ -238,7 +321,7 @@ async fn execute_api_request(
                 "error",
                 Some(&message),
                 started_at.elapsed().as_millis() as i64,
-                &model,
+                &route,
             );
             message
         })?;
@@ -254,7 +337,7 @@ async fn execute_api_request(
             "error",
             Some(&message),
             started_at.elapsed().as_millis() as i64,
-            &model,
+            &route,
         );
         message
     })?;
@@ -269,7 +352,7 @@ async fn execute_api_request(
             "error",
             Some(&message),
             started_at.elapsed().as_millis() as i64,
-            &model,
+            &route,
         );
         return Err(message);
     }
@@ -283,7 +366,7 @@ async fn execute_api_request(
             "error",
             Some(&error),
             started_at.elapsed().as_millis() as i64,
-            &model,
+            &route,
         );
         error
     })?;
@@ -296,10 +379,102 @@ async fn execute_api_request(
         "success",
         None,
         started_at.elapsed().as_millis() as i64,
-        &model,
+        &route,
     );
 
     Ok(content)
+}
+
+fn resolve_ai_route(
+    conn: &rusqlite::Connection,
+    task_kind: AiTaskKind,
+) -> Result<ResolvedAiRoute, String> {
+    let config = load_deepseek_config(conn)?;
+    let requested_tier = task_kind.model_tier();
+    let requested_model = match requested_tier {
+        AiModelTier::Flash => config.flash_model.trim(),
+        AiModelTier::Pro => config.pro_model.trim(),
+    };
+
+    let (resolved_tier, model) = if !requested_model.is_empty() {
+        (requested_tier, requested_model.to_string())
+    } else {
+        let fallback_tier = match requested_tier {
+            AiModelTier::Flash => AiModelTier::Pro,
+            AiModelTier::Pro => AiModelTier::Flash,
+        };
+        let fallback_model = match fallback_tier {
+            AiModelTier::Flash => config.flash_model.trim(),
+            AiModelTier::Pro => config.pro_model.trim(),
+        };
+        if fallback_model.is_empty() {
+            return Err(
+                "DeepSeek model is not configured. Please set flash or pro model in Settings."
+                    .to_string(),
+            );
+        }
+        (fallback_tier, fallback_model.to_string())
+    };
+
+    Ok(ResolvedAiRoute {
+        task_kind,
+        resolved_tier,
+        fallback_used: requested_tier != resolved_tier,
+        base_url: config.base_url,
+        model,
+        api_key: config.api_key,
+    })
+}
+
+fn load_deepseek_config(conn: &rusqlite::Connection) -> Result<DeepSeekConfig, String> {
+    let deepseek_base_url = setting_repo::get_setting(conn, "deepseek_base_url")
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let legacy_base_url = setting_repo::get_setting(conn, "api_base_url")
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let base_url = if !deepseek_base_url.trim().is_empty() {
+        deepseek_base_url
+    } else if is_deepseek_like(&legacy_base_url) {
+        legacy_base_url
+    } else {
+        "https://api.deepseek.com/v1".to_string()
+    };
+
+    let deepseek_flash_model = setting_repo::get_setting(conn, "deepseek_flash_model")
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let deepseek_pro_model = setting_repo::get_setting(conn, "deepseek_pro_model")
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let legacy_model = setting_repo::get_setting(conn, "api_model")
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+
+    Ok(DeepSeekConfig {
+        base_url,
+        flash_model: if !deepseek_flash_model.trim().is_empty() {
+            deepseek_flash_model
+        } else if is_deepseek_like(&legacy_model) {
+            legacy_model.clone()
+        } else {
+            String::new()
+        },
+        pro_model: if !deepseek_pro_model.trim().is_empty() {
+            deepseek_pro_model
+        } else if is_deepseek_like(&legacy_model) {
+            legacy_model
+        } else {
+            String::new()
+        },
+        api_key: setting_repo::get_setting(conn, "api_key")
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default(),
+    })
+}
+
+fn is_deepseek_like(value: &str) -> bool {
+    value.to_ascii_lowercase().contains("deepseek")
 }
 
 fn extract_request_date(request_json: &str) -> String {
@@ -329,7 +504,7 @@ fn persist_api_run(
     status: &str,
     error_message: Option<&str>,
     latency_ms: i64,
-    engine_name: &str,
+    route: &ResolvedAiRoute,
 ) {
     if let Ok(conn) = state.0.lock() {
         let _ = api_run_repo::create_run(
@@ -340,7 +515,70 @@ fn persist_api_run(
             status,
             error_message,
             latency_ms,
-            engine_name,
+            &route.model,
+            route.task_kind.as_str(),
+            route.resolved_tier.as_str(),
+            route.fallback_used,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::migrations::run_migrations;
+    use crate::db::repositories::setting_repo;
+    use rusqlite::Connection;
+
+    #[test]
+    fn task_kind_uses_expected_model_tier() {
+        assert_eq!(AiTaskKind::Scoring.model_tier(), AiModelTier::Flash);
+        assert_eq!(AiTaskKind::PlanRefresh.model_tier(), AiModelTier::Flash);
+        assert_eq!(
+            AiTaskKind::PlanClarification.model_tier(),
+            AiModelTier::Flash
+        );
+        assert_eq!(AiTaskKind::Tarot.model_tier(), AiModelTier::Pro);
+        assert_eq!(AiTaskKind::PeriodReportDay.model_tier(), AiModelTier::Pro);
+        assert_eq!(AiTaskKind::PeriodReportWeek.model_tier(), AiModelTier::Pro);
+        assert_eq!(AiTaskKind::PeriodReportMonth.model_tier(), AiModelTier::Pro);
+    }
+
+    #[test]
+    fn route_falls_back_to_pro_when_flash_missing() {
+        let conn = Connection::open_in_memory().expect("db");
+        run_migrations(&conn).expect("migrate");
+        setting_repo::set_setting(&conn, "deepseek_pro_model", "deepseek-reasoner")
+            .expect("pro model");
+
+        let route = resolve_ai_route(&conn, AiTaskKind::Scoring).expect("route");
+
+        assert_eq!(route.resolved_tier, AiModelTier::Pro);
+        assert!(route.fallback_used);
+        assert_eq!(route.model, "deepseek-reasoner");
+    }
+
+    #[test]
+    fn route_falls_back_to_flash_when_pro_missing() {
+        let conn = Connection::open_in_memory().expect("db");
+        run_migrations(&conn).expect("migrate");
+        setting_repo::set_setting(&conn, "deepseek_flash_model", "deepseek-chat")
+            .expect("flash model");
+
+        let route = resolve_ai_route(&conn, AiTaskKind::Tarot).expect("route");
+
+        assert_eq!(route.resolved_tier, AiModelTier::Flash);
+        assert!(route.fallback_used);
+        assert_eq!(route.model, "deepseek-chat");
+    }
+
+    #[test]
+    fn route_rejects_when_both_models_missing() {
+        let conn = Connection::open_in_memory().expect("db");
+        run_migrations(&conn).expect("migrate");
+
+        let error = resolve_ai_route(&conn, AiTaskKind::Tarot).expect_err("missing model");
+
+        assert!(error.contains("DeepSeek model is not configured"));
     }
 }

@@ -3,7 +3,10 @@ pub mod db;
 pub mod models;
 pub mod services;
 
-use commands::{api_proxy, daily_insight, global_closeout, import_export, mind, personal_memory, plan, record, score, settings, stat};
+use commands::{
+    api_proxy, daily_insight, global_closeout, import_export, mind, personal_memory, plan, record,
+    score, settings, stat,
+};
 use db::connection::{AppDataDirState, DbState};
 use db::migrations::run_migrations;
 use tauri::Manager;

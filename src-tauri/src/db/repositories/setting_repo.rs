@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result, params};
+use rusqlite::{params, Connection, Result};
 
 pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
     let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
