@@ -1,15 +1,17 @@
 @echo off
 setlocal
+chcp 65001 >nul
 
-echo [PGRN] building release bundles...
+set "ROOT_DIR=%~dp0"
+cd /d "%ROOT_DIR%"
+
+echo [PGRN] Building desktop release...
 call npm run tauri build
-
-if exist "%~dp0pgrn.exe" (
-    del /f /q "%~dp0pgrn.exe"
+if errorlevel 1 (
+    echo.
+    echo [PGRN] Release build failed.
+    pause
+    exit /b 1
 )
 
-echo.
-echo [PGRN] build complete.
-echo [PGRN] release exe: src-tauri\target\release\pgrn.exe
-echo [PGRN] installers: src-tauri\target\release\bundle\
-pause
+exit /b 0

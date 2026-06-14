@@ -2,7 +2,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::db::connection::DbState;
-use crate::db::repositories::{daily_review_repo, dimension_repo, ledger_repo, record_repo};
+use crate::db::repositories::{daily_review_repo, dimension_repo, ledger_repo, plan_repo, record_repo};
 
 #[derive(Serialize)]
 pub struct DimensionTotal {
@@ -33,9 +33,11 @@ pub struct LedgerItem {
     pub id: i64,
     pub date: String,
     pub dimension_key: String,
+    pub dimension_name: String,
     pub change_value: i32,
     pub source_title: String,
     pub reason: String,
+    pub engine: String,
 }
 
 #[tauri::command]
@@ -44,16 +46,27 @@ pub fn get_ledger_by_date(
     date: String,
 ) -> Result<Vec<LedgerItem>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let dims = dimension_repo::get_all_dimensions(&conn).map_err(|e| e.to_string())?;
+    let dim_map: std::collections::HashMap<String, String> =
+        dims.into_iter().map(|d| (d.key, d.name)).collect();
     let entries = ledger_repo::get_ledger_by_date(&conn, &date).map_err(|e| e.to_string())?;
     Ok(entries
         .into_iter()
-        .map(|e| LedgerItem {
-            id: e.id,
-            date: e.date,
-            dimension_key: e.dimension_key,
-            change_value: e.change_value,
-            source_title: e.source_title,
-            reason: e.reason,
+        .map(|e| {
+            let dimension_key = e.dimension_key;
+            LedgerItem {
+                id: e.id,
+                date: e.date,
+                dimension_name: dim_map
+                    .get(&dimension_key)
+                    .cloned()
+                    .unwrap_or_else(|| dimension_key.clone()),
+                dimension_key,
+                change_value: e.change_value,
+                source_title: e.source_title,
+                reason: e.reason,
+                engine: e.engine,
+            }
         })
         .collect())
 }
@@ -150,6 +163,29 @@ pub struct CalendarOverviewItem {
     pub date: String,
     pub record_count: i32,
     pub is_analyzed: bool,
+    pub has_week_plan_update: bool,
+    pub has_month_plan_update: bool,
+}
+
+#[derive(Serialize)]
+pub struct DailyCloseoutStatus {
+    pub date: String,
+    pub has_ledger: bool,
+    pub ledger_count: i32,
+}
+
+#[tauri::command]
+pub fn get_daily_closeout_status(
+    state: State<DbState>,
+    date: String,
+) -> Result<DailyCloseoutStatus, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let entries = ledger_repo::get_ledger_by_date(&conn, &date).map_err(|e| e.to_string())?;
+    Ok(DailyCloseoutStatus {
+        date,
+        has_ledger: !entries.is_empty(),
+        ledger_count: entries.len() as i32,
+    })
 }
 
 #[tauri::command]
@@ -180,15 +216,33 @@ pub fn get_calendar_overview(
 
     let flag_map: std::collections::HashMap<String, bool> =
         review_flags.into_iter().map(|flag| (flag.date, flag.is_analyzed)).collect();
+    let count_map: std::collections::HashMap<String, i32> =
+        record_counts.into_iter().map(|item| (item.date, item.count)).collect();
 
-    Ok(record_counts
-        .into_iter()
-        .map(|item| CalendarOverviewItem {
-            is_analyzed: flag_map.get(&item.date).copied().unwrap_or(false),
-            date: item.date,
-            record_count: item.count,
-        })
-        .collect())
+    let mut items = Vec::new();
+    let mut cursor = start;
+    while cursor <= end {
+        let date = cursor.format("%Y-%m-%d").to_string();
+        let has_week_plan_update = plan_repo::get_cycle_covering_date(&conn, "week", &date)
+            .map_err(|e| e.to_string())?
+            .map(|cycle| !cycle.ai_summary.trim().is_empty() || cycle.last_ai_run_at.is_some())
+            .unwrap_or(false);
+        let has_month_plan_update = plan_repo::get_cycle_covering_date(&conn, "month", &date)
+            .map_err(|e| e.to_string())?
+            .map(|cycle| !cycle.ai_summary.trim().is_empty() || cycle.last_ai_run_at.is_some())
+            .unwrap_or(false);
+
+        items.push(CalendarOverviewItem {
+            date: date.clone(),
+            record_count: count_map.get(&date).copied().unwrap_or(0),
+            is_analyzed: flag_map.get(&date).copied().unwrap_or(false),
+            has_week_plan_update,
+            has_month_plan_update,
+        });
+        cursor += chrono::Duration::days(1);
+    }
+
+    Ok(items)
 }
 
 fn calculate_streaks(dates: &[String], today: chrono::NaiveDate) -> StreakInfo {

@@ -102,7 +102,21 @@ Run the built release:
 run-release.bat
 ```
 
-Do not use any manually copied root-level `pgrn.exe`. The supported release entry is `src-tauri\target\release\pgrn.exe` or the generated installer packages.
+Canonical project launch directory:
+
+```text
+启动入口\
+```
+
+Use the files in that folder as the only supported startup entrypoints:
+
+- `启动入口\打开完整版.cmd`
+- `启动入口\开发模式.cmd`
+- `启动入口\构建完整版.cmd`
+
+`启动入口\打开完整版.cmd` routes through `启动入口\launch-full.ps1`, which checks whether the source code is newer than `src-tauri\target\release\pgrn.exe`. If the code changed, it rebuilds first and only then launches the desktop app.
+
+Root-level launch files are now compatibility wrappers only. Future launch-related changes should be made in `启动入口\` first, not in the root wrappers.
 
 ## Test Commands
 

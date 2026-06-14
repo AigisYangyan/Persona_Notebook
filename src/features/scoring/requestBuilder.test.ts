@@ -85,4 +85,129 @@ describe("buildDailyAnalysisRequest", () => {
       physique: 2,
     });
   });
+
+  it("omits container parent tasks with zero self minutes from analysis records", () => {
+    const records: RecordItem[] = [
+      {
+        id: 1,
+        date: "2026-06-10",
+        title: "课程项目",
+        minutes: 0,
+        difficulty_star: 0,
+        parent_id: null,
+        is_completed: false,
+        completed_at: null,
+        elapsed_seconds: 0,
+        timer_mode: "stopwatch",
+        countdown_target_seconds: null,
+        timer_started_at: null,
+      },
+      {
+        id: 2,
+        date: "2026-06-10",
+        title: "接口联调",
+        minutes: 25,
+        difficulty_star: 2,
+        parent_id: 1,
+        is_completed: false,
+        completed_at: null,
+        elapsed_seconds: 1500,
+        timer_mode: "stopwatch",
+        countdown_target_seconds: null,
+        timer_started_at: null,
+      },
+    ];
+    const rulePreview: ScorePreviewItem[] = [
+      {
+        record_id: 2,
+        title: "接口联调",
+        category: "本地规则: knowledge",
+        changes: [{ dimension_key: "knowledge", change_value: 3 }],
+        difficulty_star: 2,
+        confidence: 0.82,
+        reason: "命中学习规则。",
+        engine: "rules",
+      },
+    ];
+
+    const request = buildDailyAnalysisRequest("2026-06-10", records, rulePreview);
+
+    expect(request.records).toEqual([
+      {
+        title: "接口联调",
+        minutes: 25,
+        difficulty_star: 2,
+      },
+    ]);
+  });
+
+  it("keeps parent tasks that have their own self minutes", () => {
+    const records: RecordItem[] = [
+      {
+        id: 1,
+        date: "2026-06-10",
+        title: "毕业设计",
+        minutes: 10,
+        difficulty_star: 3,
+        parent_id: null,
+        is_completed: false,
+        completed_at: null,
+        elapsed_seconds: 600,
+        timer_mode: "stopwatch",
+        countdown_target_seconds: null,
+        timer_started_at: null,
+      },
+      {
+        id: 2,
+        date: "2026-06-10",
+        title: "论文润色",
+        minutes: 35,
+        difficulty_star: 2,
+        parent_id: 1,
+        is_completed: false,
+        completed_at: null,
+        elapsed_seconds: 2100,
+        timer_mode: "countdown",
+        countdown_target_seconds: 2400,
+        timer_started_at: null,
+      },
+    ];
+    const rulePreview: ScorePreviewItem[] = [
+      {
+        record_id: 1,
+        title: "毕业设计",
+        category: "本地规则: knowledge",
+        changes: [{ dimension_key: "knowledge", change_value: 1 }],
+        difficulty_star: 3,
+        confidence: 0.82,
+        reason: "命中项目规则。",
+        engine: "rules",
+      },
+      {
+        record_id: 2,
+        title: "论文润色",
+        category: "本地规则: expression",
+        changes: [{ dimension_key: "expression", change_value: 2 }],
+        difficulty_star: 2,
+        confidence: 0.8,
+        reason: "命中文稿规则。",
+        engine: "rules",
+      },
+    ];
+
+    const request = buildDailyAnalysisRequest("2026-06-10", records, rulePreview);
+
+    expect(request.records).toEqual([
+      {
+        title: "毕业设计",
+        minutes: 10,
+        difficulty_star: 3,
+      },
+      {
+        title: "论文润色",
+        minutes: 35,
+        difficulty_star: 2,
+      },
+    ]);
+  });
 });

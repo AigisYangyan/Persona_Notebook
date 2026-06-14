@@ -45,11 +45,17 @@ export function buildDailyAnalysisRequest(
   records: RecordItem[],
   rulePreview: ScorePreviewItem[]
 ): DailyAnalysisRequest {
+  const analyzableRecords = records.filter((record) => record.minutes > 0);
+  const analyzableIds = new Set(analyzableRecords.map((record) => record.id));
+  const filteredRulePreview = rulePreview.filter((item) =>
+    item.record_id == null ? true : analyzableIds.has(item.record_id)
+  );
+
   return {
     version: "1.0",
     feedback_mode: "rules_api",
     date,
-    records: records.map((record) => ({
+    records: analyzableRecords.map((record) => ({
       title: record.title,
       minutes: record.minutes,
       difficulty_star: record.difficulty_star,
@@ -58,9 +64,9 @@ export function buildDailyAnalysisRequest(
     score_rules: DEFAULT_SCORE_RULES,
     rule_hints: {
       source: "deterministic_rules_cache",
-      summary: buildRuleHintSummary(rulePreview),
-      suggested_totals: buildSuggestedTotals(rulePreview),
-      record_hints: rulePreview.map((item, index) => ({
+      summary: buildRuleHintSummary(filteredRulePreview),
+      suggested_totals: buildSuggestedTotals(filteredRulePreview),
+      record_hints: filteredRulePreview.map((item, index) => ({
         record_index: index,
         title: item.title,
         category: item.category,

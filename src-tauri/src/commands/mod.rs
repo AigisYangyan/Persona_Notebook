@@ -4,3 +4,8 @@ pub mod settings;
 pub mod import_export;
 pub mod api_proxy;
 pub mod score;
+pub mod plan;
+pub mod mind;
+pub mod personal_memory;
+pub mod daily_insight;
+pub mod global_closeout;

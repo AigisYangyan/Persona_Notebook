@@ -62,13 +62,44 @@ const glowColorsStrong: Record<string, string> = {
   border-radius: 2px;
   position: relative;
   overflow: hidden;
-  transition: all 0.3s ease;
+  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
   backdrop-filter: blur(4px);
+}
+
+.cyber-panel-wrapper::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    110deg,
+    transparent 40%,
+    rgba(0, 212, 255, 0.04) 50%,
+    transparent 60%
+  );
+  background-size: 200% 100%;
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
 }
 
 .cyber-panel-wrapper:hover {
   border-color: var(--panel-glow-strong);
-  box-shadow: 0 0 16px var(--panel-glow), inset 0 0 16px rgba(0, 212, 255, 0.03);
+  box-shadow: 0 0 20px var(--panel-glow), inset 0 0 16px rgba(0, 212, 255, 0.04);
+  transform: translateY(-2px);
+}
+
+.cyber-panel-wrapper:hover::after {
+  opacity: 1;
+  animation: panel-sheen 1.8s linear infinite;
+}
+
+@keyframes panel-sheen {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 .cyber-panel-wrapper.angled {
@@ -90,16 +121,17 @@ const glowColorsStrong: Record<string, string> = {
 }
 
 .header-title {
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 800;
   letter-spacing: 2px;
   text-transform: uppercase;
   color: var(--cyber-cyan);
+  text-shadow: 0 0 10px rgba(0, 212, 255, 0.25);
 }
 
 .header-sub {
-  font-size: 12px;
-  font-weight: 400;
+  font-size: 13px;
+  font-weight: 500;
   color: var(--cyber-text-muted);
   letter-spacing: 1px;
 }
@@ -144,8 +176,9 @@ const glowColorsStrong: Record<string, string> = {
 }
 
 .cyber-panel-wrapper:hover .corner {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   border-color: var(--cyber-cyan);
+  box-shadow: 0 0 8px var(--panel-glow-strong);
 }
 </style>

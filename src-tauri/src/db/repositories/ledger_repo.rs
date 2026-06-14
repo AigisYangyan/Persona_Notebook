@@ -85,6 +85,26 @@ pub fn get_totals_by_date(conn: &Connection, date: &str) -> Result<Vec<(String, 
     Ok(totals)
 }
 
+pub fn get_totals_in_range(
+    conn: &Connection,
+    start_date: &str,
+    end_date: &str,
+) -> Result<Vec<(String, i32)>> {
+    let mut stmt = conn.prepare(
+        "SELECT dimension_key, SUM(change_value)
+         FROM stat_ledger
+         WHERE date BETWEEN ?1 AND ?2
+           AND is_rollback = 0
+         GROUP BY dimension_key"
+    )?;
+    let totals = stmt
+        .query_map(params![start_date, end_date], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(totals)
+}
+
 pub fn has_active_entries_for_date(conn: &Connection, date: &str) -> Result<bool> {
     let mut stmt = conn.prepare(
         "SELECT EXISTS(

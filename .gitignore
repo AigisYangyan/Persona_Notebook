@@ -20,6 +20,14 @@ attachments
 *.db-shm
 *.db-wal
 kimi-export-*.md
+.playwright-mcp/
+settings-rag-foundation.png
+vite-dev.log
+vite-verify.log
+启动入口/发布/
+launch-full.cmd
+launch-full.ps1
+启动完整版.bat
 
 # Editor directories and files
 .vscode/*
