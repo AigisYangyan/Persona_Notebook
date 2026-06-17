@@ -423,6 +423,42 @@ pub async fn submit_plan_ai_answers(
 }
 
 #[tauri::command]
+pub fn get_plan_ai_outcome(
+    state: State<DbState>,
+    session_id: i64,
+) -> Result<PlanAiOutcomeDto, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let session = plan_repo::get_ai_session_by_id(&conn, session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "plan ai session not found".to_string())?;
+    map_session_to_outcome(&session)
+}
+
+#[tauri::command]
+pub fn get_latest_plan_ai_outcome(
+    state: State<DbState>,
+    period_type: String,
+    anchor_date: String,
+) -> Result<Option<PlanAiOutcomeDto>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let range = resolve_period_range(&period_type, Some(&anchor_date))?;
+    let cycle = plan_repo::get_cycle_by_period(
+        &conn,
+        &period_type,
+        &fmt_date(range.start_date),
+        &fmt_date(range.end_date),
+    )
+    .map_err(|e| e.to_string())?;
+    let Some(cycle) = cycle else {
+        return Ok(None);
+    };
+
+    let session = plan_repo::get_latest_ai_session_for_cycle(&conn, cycle.id, Some("clarifying"))
+        .map_err(|e| e.to_string())?;
+    session.map(|value| map_session_to_outcome(&value)).transpose()
+}
+
+#[tauri::command]
 pub fn apply_plan_ai_update(
     state: State<DbState>,
     session_id: i64,
@@ -471,6 +507,24 @@ fn snapshot_lock<'a>(
     state: &'a State<'a, DbState>,
 ) -> Result<std::sync::MutexGuard<'a, rusqlite::Connection>, String> {
     state.0.lock().map_err(|e| e.to_string())
+}
+
+fn map_session_to_outcome(session: &crate::models::plan::PlanAiSession) -> Result<PlanAiOutcomeDto, String> {
+    let questions: Vec<String> = serde_json::from_str(&session.questions_json).map_err(|e| e.to_string())?;
+    let proposal = session
+        .proposal_json
+        .as_deref()
+        .map(serde_json::from_str::<PlanAiProposalDto>)
+        .transpose()
+        .map_err(|e| e.to_string())?;
+
+    Ok(PlanAiOutcomeDto {
+        session_id: session.id,
+        status: session.status.clone(),
+        requires_clarification: session.status == "clarifying",
+        questions,
+        proposal,
+    })
 }
 
 fn load_plan_snapshot(

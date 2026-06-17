@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { NAlert, NButton, NInput, NSelect, useMessage } from "naive-ui";
-import PlanAiDialog from "@/components/plans/PlanAiDialog.vue";
 import GoalProgressSummary from "@/components/plans/GoalProgressSummary.vue";
+import PlanAiDialog from "@/components/plans/PlanAiDialog.vue";
 import PlanGrowthBars from "@/components/plans/PlanGrowthBars.vue";
 import PlanItemCard from "@/components/plans/PlanItemCard.vue";
 import { formatCycleRange, shiftAnchorDate } from "@/features/plans/periods";
@@ -32,7 +32,7 @@ const headerRange = computed(() =>
   snapshot.value ? formatCycleRange(snapshot.value.cycle) : planStore.weekAnchorDate
 );
 const headerSummary = computed(
-  () => snapshot.value?.cycle.ai_summary || "这一周的 Goal 推进和 My Day 成长会一起沉淀在这里。"
+  () => snapshot.value?.cycle.ai_summary || "这一周的 Goal 推进和 My Day 成长，会一起沉淀在这里。"
 );
 
 watch(
@@ -43,7 +43,6 @@ watch(
 );
 
 onMounted(() => {
-  planStore.clearAiState();
   void loadCurrentWeek();
 });
 
@@ -51,6 +50,9 @@ async function loadCurrentWeek() {
   pageError.value = "";
   try {
     await planStore.loadWeekPlan();
+    if (!planStore.aiOutcome) {
+      await planStore.restoreLatestAiOutcome("week");
+    }
   } catch (error) {
     pageError.value = readError(error, "加载本周 Goal 失败");
   }
@@ -60,6 +62,7 @@ async function shiftWeek(delta: number) {
   try {
     const nextAnchor = shiftAnchorDate("week", planStore.weekAnchorDate, delta);
     await planStore.loadWeekPlan(nextAnchor);
+    await planStore.restoreLatestAiOutcome("week", nextAnchor);
   } catch (error) {
     message.error(readError(error, "切换周视图失败"));
   }
@@ -133,7 +136,9 @@ async function refreshFromCloseout() {
   try {
     const result = await closeoutStore.run(planStore.weekAnchorDate, "week");
     message.success(
-      result.weekPlan.status === "needs_clarification" ? "周计划需要补充回答后再应用" : "周计划已通过统一收拢链路更新"
+      result.weekPlan.status === "needs_clarification"
+        ? "周计划需要补充回答后再应用"
+        : "周计划已通过统一收拢链路更新"
     );
   } catch (error) {
     message.error(readError(error, "周计划统一更新失败"));
@@ -174,9 +179,7 @@ function readError(error: unknown, fallback: string): string {
 
 <template>
   <div class="cyber-page goal-page">
-    <h1 class="cyber-page-title">
-      WEEK GOALS<span class="sub">本周目标</span>
-    </h1>
+    <h1 class="cyber-page-title">WEEK GOALS<span class="sub">本周目标</span></h1>
 
     <n-alert v-if="pageError" type="error" :show-icon="false" style="margin-bottom: 16px">
       {{ pageError }}
@@ -207,9 +210,7 @@ function readError(error: unknown, fallback: string): string {
 
         <div class="goal-block cyber-panel">
           <div class="block-title">Week Goals</div>
-          <div v-if="snapshot.items.length === 0" class="empty-hint">
-            本周还没有 Goal，先在下面补第一条。
-          </div>
+          <div v-if="snapshot.items.length === 0" class="empty-hint">本周还没有 Goal，先在下面补第一条。</div>
           <div v-else class="goal-list">
             <PlanItemCard
               v-for="item in snapshot.items"
@@ -233,12 +234,7 @@ function readError(error: unknown, fallback: string): string {
               :autosize="{ minRows: 2, maxRows: 4 }"
             />
             <div class="goal-form-row">
-              <n-select
-                v-model:value="newGoalDimension"
-                :options="dimensionOptions"
-                clearable
-                placeholder="关联维度"
-              />
+              <n-select v-model:value="newGoalDimension" :options="dimensionOptions" clearable placeholder="关联维度" />
               <n-button type="primary" :loading="planStore.saving" @click="createGoal">添加</n-button>
             </div>
           </div>
@@ -344,16 +340,15 @@ function readError(error: unknown, fallback: string): string {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
-  align-items: center;
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 1100px) {
   .goal-layout {
     grid-template-columns: 1fr;
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 720px) {
   .goal-toolbar {
     flex-direction: column;
   }

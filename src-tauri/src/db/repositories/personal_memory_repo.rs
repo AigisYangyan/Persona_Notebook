@@ -11,6 +11,85 @@ use std::collections::{HashMap, HashSet};
 
 const PROFILE_ROW_ID: i64 = 1;
 
+fn tokenize_query(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut buf = String::new();
+    for ch in text.chars() {
+        // Keep ASCII alnum together; keep CJK chars together.
+        if ch.is_ascii_alphanumeric() || ('\u{4E00}'..='\u{9FFF}').contains(&ch) {
+            buf.push(ch.to_ascii_lowercase());
+        } else if !buf.is_empty() {
+            tokens.push(std::mem::take(&mut buf));
+        }
+    }
+    if !buf.is_empty() {
+        tokens.push(buf);
+    }
+
+    let mut out = Vec::new();
+    for token in tokens {
+        // For long CJK blocks, generate a few 2-char shingles to improve recall.
+        let is_cjk = token.chars().any(|ch| ('\u{4E00}'..='\u{9FFF}').contains(&ch));
+        if is_cjk {
+            let chars = token.chars().collect::<Vec<_>>();
+            if chars.len() >= 2 {
+                for i in 0..chars.len().saturating_sub(1).min(20) {
+                    out.push(format!("{}{}", chars[i], chars[i + 1]));
+                }
+            } else if chars.len() == 1 {
+                out.push(token);
+            }
+        } else if token.len() >= 3 {
+            out.push(token);
+        }
+        if out.len() >= 80 {
+            break;
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn memory_text(item: &PersonalMemoryViewItem) -> String {
+    let mut text = String::new();
+    text.push_str(&item.title);
+    text.push(' ');
+    text.push_str(&item.summary);
+    text.push(' ');
+    text.push_str(&item.detail);
+    for tag in &item.tags {
+        text.push(' ');
+        text.push_str(tag);
+    }
+    text.to_lowercase()
+}
+
+fn score_query_relevance(item: &PersonalMemoryViewItem, tokens: &[String]) -> i32 {
+    if tokens.is_empty() {
+        return 0;
+    }
+    let text = memory_text(item);
+    let mut hits = 0i32;
+    for token in tokens {
+        if token.is_empty() {
+            continue;
+        }
+        if text.contains(token) {
+            hits += 1;
+        }
+        if hits >= 12 {
+            break;
+        }
+    }
+    // Weight: query hits dominate, then importance.
+    hits * 10 + (item.importance / 5)
+}
+
+fn dedup_by_id(items: &mut Vec<PersonalMemoryViewItem>, seen: &mut HashSet<i64>) {
+    items.retain(|item| seen.insert(item.id));
+}
+
 pub fn get_personal_profile(conn: &Connection) -> Result<PersonalProfile, String> {
     let profile = conn
         .query_row(
@@ -163,7 +242,9 @@ pub fn build_personal_context_pack(
     date: &str,
     mode: &str,
 ) -> Result<PersonalContextPack, String> {
-    let profile = get_personal_profile(conn)?;
+    let mut profile = get_personal_profile(conn)?;
+    // Omit volatile timestamp from the cache-sensitive prefix.
+    profile.updated_at = None;
     let overview = get_personal_memory_overview(conn)?;
     let all_items = list_active_memory_items(conn)?;
 
@@ -172,6 +253,7 @@ pub fn build_personal_context_pack(
         b.importance
             .cmp(&a.importance)
             .then_with(|| b.last_seen_date.cmp(&a.last_seen_date))
+            .then_with(|| a.id.cmp(&b.id))
     });
     high_priority_memories.truncate(20);
 
@@ -193,16 +275,17 @@ pub fn build_personal_context_pack(
         b.last_seen_date
             .cmp(&a.last_seen_date)
             .then_with(|| b.importance.cmp(&a.importance))
+            .then_with(|| a.id.cmp(&b.id))
     });
     recent_memories.truncate(20);
 
-    let relevant_types = [
-        "habit",
-        "recurring_pattern",
-        "relationship",
-        "goal_context",
-        "caution",
-    ];
+    let relevant_types: &[&str] = match mode {
+        // Tarot: prioritize relationship/pattern/caution.
+        "tarot" => &["recurring_pattern", "relationship", "caution", "habit"],
+        // Planning contexts: habit/goal context.
+        "week" | "month" => &["goal_context", "habit", "recurring_pattern", "relationship"],
+        _ => &["habit", "recurring_pattern", "relationship", "goal_context", "caution"],
+    };
     let mut relevant_memories = all_items
         .iter()
         .filter(|item| relevant_types.contains(&item.memory_type.as_str()))
@@ -212,20 +295,142 @@ pub fn build_personal_context_pack(
         b.importance
             .cmp(&a.importance)
             .then_with(|| b.last_seen_date.cmp(&a.last_seen_date))
+            .then_with(|| a.id.cmp(&b.id))
     });
     relevant_memories.truncate(20);
 
+    // Query-relevant bucket (filled by callers who provide query tokens).
+    let query_relevant_memories = Vec::new();
+
+    // Cold-start: if there is no memory at all, derive 1-3 soft seeds from profile.
+    let mut high_priority_memories = high_priority_memories;
+    let mut relevant_memories = relevant_memories;
+    let mut recent_memories = recent_memories;
+    if all_items.is_empty() {
+        let mut seed_items = Vec::new();
+        if !profile.personality.trim().is_empty() {
+            seed_items.push(PersonalMemoryViewItem {
+                id: -1,
+                memory_type: "seed_profile".into(),
+                title: "Personality".into(),
+                summary: profile.personality.clone(),
+                detail: "".into(),
+                tags: vec!["seed".into()],
+                importance: 80,
+                confidence: 1.0,
+                first_seen_date: Some(date.to_string()),
+                last_seen_date: Some(date.to_string()),
+                status: "active".into(),
+                supersedes_id: None,
+                created_by: "seed".into(),
+                source_count: 0,
+                evidence_ids: vec![],
+            });
+        }
+        if !profile.experiences.trim().is_empty() {
+            seed_items.push(PersonalMemoryViewItem {
+                id: -2,
+                memory_type: "seed_profile".into(),
+                title: "Experiences".into(),
+                summary: profile.experiences.clone(),
+                detail: "".into(),
+                tags: vec!["seed".into()],
+                importance: 75,
+                confidence: 1.0,
+                first_seen_date: Some(date.to_string()),
+                last_seen_date: Some(date.to_string()),
+                status: "active".into(),
+                supersedes_id: None,
+                created_by: "seed".into(),
+                source_count: 0,
+                evidence_ids: vec![],
+            });
+        }
+        if !profile.personal_notes.trim().is_empty() {
+            seed_items.push(PersonalMemoryViewItem {
+                id: -3,
+                memory_type: "seed_profile".into(),
+                title: "Personal notes".into(),
+                summary: profile.personal_notes.clone(),
+                detail: "".into(),
+                tags: vec!["seed".into()],
+                importance: 70,
+                confidence: 1.0,
+                first_seen_date: Some(date.to_string()),
+                last_seen_date: Some(date.to_string()),
+                status: "active".into(),
+                supersedes_id: None,
+                created_by: "seed".into(),
+                source_count: 0,
+                evidence_ids: vec![],
+            });
+        }
+        seed_items.truncate(3);
+        high_priority_memories.extend(seed_items.clone());
+        relevant_memories.extend(seed_items.clone());
+        recent_memories.extend(seed_items);
+    }
+
+    // Cross-bucket dedup to keep context tight and stable.
+    let mut seen = HashSet::new();
+    dedup_by_id(&mut high_priority_memories, &mut seen);
+    dedup_by_id(&mut relevant_memories, &mut seen);
+    dedup_by_id(&mut recent_memories, &mut seen);
+
     Ok(PersonalContextPack {
         schema_version: "1.0".into(),
-        date: date.to_string(),
-        mode: mode.to_string(),
-        generated_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         profile,
-        overview,
         high_priority_memories,
-        recent_memories,
         relevant_memories,
+        recent_memories,
+        query_relevant_memories,
+        overview,
+        mode: mode.to_string(),
+        date: date.to_string(),
     })
+}
+
+pub fn fill_query_relevant_memories(
+    pack: &mut PersonalContextPack,
+    all_items: &[PersonalMemoryViewItem],
+    query_texts: &[String],
+) {
+    let tokens = tokenize_query(&query_texts.join(" "));
+    if tokens.is_empty() || all_items.is_empty() {
+        return;
+    }
+
+    let existing_ids: HashSet<i64> = pack
+        .high_priority_memories
+        .iter()
+        .chain(pack.relevant_memories.iter())
+        .chain(pack.recent_memories.iter())
+        .map(|item| item.id)
+        .collect();
+
+    let mut scored = all_items
+        .iter()
+        .filter(|item| !existing_ids.contains(&item.id))
+        .filter_map(|item| {
+            let score = score_query_relevance(item, &tokens);
+            if score > 0 {
+                Some((score, item.clone()))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by(|(score_a, a), (score_b, b)| {
+        score_b
+            .cmp(score_a)
+            .then_with(|| b.last_seen_date.cmp(&a.last_seen_date))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    pack.query_relevant_memories = scored
+        .into_iter()
+        .take(15)
+        .map(|(_, item)| item)
+        .collect();
 }
 
 pub fn apply_memory_patch(

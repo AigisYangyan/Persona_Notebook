@@ -1,6 +1,6 @@
 [package]
 name = "pgrn"
-version = "0.2.2"
+version = "0.2.3"
 description = "Local-first desktop notebook for structured personal growth scoring and review."
 authors = ["PGRN Contributors"]
 edition = "2021"

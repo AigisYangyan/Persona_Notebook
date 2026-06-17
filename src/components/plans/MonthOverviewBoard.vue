@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { NAlert, NButton, NInput, NSelect, useMessage } from "naive-ui";
-import PlanAiDialog from "@/components/plans/PlanAiDialog.vue";
 import GoalProgressSummary from "@/components/plans/GoalProgressSummary.vue";
+import PlanAiDialog from "@/components/plans/PlanAiDialog.vue";
 import PlanGrowthBars from "@/components/plans/PlanGrowthBars.vue";
 import PlanItemCard from "@/components/plans/PlanItemCard.vue";
 import { formatCycleRange, shiftAnchorDate } from "@/features/plans/periods";
@@ -51,7 +51,6 @@ watch(
 );
 
 onMounted(() => {
-  planStore.clearAiState();
   void loadCurrentMonth();
 });
 
@@ -59,6 +58,9 @@ async function loadCurrentMonth() {
   pageError.value = "";
   try {
     await planStore.loadMonthPlan();
+    if (!planStore.aiOutcome) {
+      await planStore.restoreLatestAiOutcome("month");
+    }
   } catch (error) {
     pageError.value = readError(error, "加载本月计划失败");
   }
@@ -68,6 +70,7 @@ async function shiftMonth(delta: number) {
   try {
     const nextAnchor = shiftAnchorDate("month", planStore.monthAnchorDate, delta);
     await planStore.loadMonthPlan(nextAnchor);
+    await planStore.restoreLatestAiOutcome("month", nextAnchor);
   } catch (error) {
     message.error(readError(error, "切换月份失败"));
   }
@@ -150,7 +153,9 @@ async function refreshFromCloseout() {
   try {
     const result = await closeoutStore.run(planStore.monthAnchorDate, "month");
     message.success(
-      result.monthPlan.status === "needs_clarification" ? "月计划需要补充回答后再应用" : "月计划已通过统一收拢链路更新"
+      result.monthPlan.status === "needs_clarification"
+        ? "月计划需要补充回答后再应用"
+        : "月计划已通过统一收拢链路更新"
     );
   } catch (error) {
     message.error(readError(error, "月计划统一更新失败"));
@@ -191,9 +196,7 @@ function readError(error: unknown, fallback: string): string {
 
 <template>
   <div class="cyber-page month-page">
-    <h1 class="cyber-page-title">
-      MONTH PLAN<span class="sub">本月总览</span>
-    </h1>
+    <h1 class="cyber-page-title">MONTH PLAN<span class="sub">本月总览</span></h1>
 
     <n-alert v-if="pageError" type="error" :show-icon="false" style="margin-bottom: 16px">
       {{ pageError }}
@@ -207,7 +210,7 @@ function readError(error: unknown, fallback: string): string {
           <button class="toolbar-btn" @click="shiftMonth(1)">▶</button>
         </div>
         <div class="toolbar-summary">
-          {{ snapshot?.cycle.ai_summary || "这里更偏向月度观察和校准，而不是逐条执行。" }}
+          {{ snapshot?.cycle.ai_summary || "这里更偏向月度观察与校准，而不是逐条执行。" }}
         </div>
       </div>
       <div class="toolbar-actions">
@@ -228,7 +231,7 @@ function readError(error: unknown, fallback: string): string {
             <n-input
               v-model:value="cycleSummaryDraft"
               type="textarea"
-              placeholder="写下这个月真正想推进的方向，后面交给 AI 和每周执行去修正。"
+              placeholder="写下这个月真正想推进的方向，后面交给 AI 和每周执行去修正"
               :autosize="{ minRows: 3, maxRows: 5 }"
             />
           </div>
@@ -264,16 +267,11 @@ function readError(error: unknown, fallback: string): string {
             <n-input
               v-model:value="newGoalDescription"
               type="textarea"
-              placeholder="写清对象、动作和结果，AI 才能更稳地判断月度推进。"
+              placeholder="写清对象、动作和结果，AI 才能更稳地判断月度推进"
               :autosize="{ minRows: 2, maxRows: 4 }"
             />
             <div class="month-form-row">
-              <n-select
-                v-model:value="newGoalDimension"
-                :options="dimensionOptions"
-                clearable
-                placeholder="关联维度"
-              />
+              <n-select v-model:value="newGoalDimension" :options="dimensionOptions" clearable placeholder="关联维度" />
               <n-button type="primary" :loading="planStore.saving" @click="createGoal">添加</n-button>
             </div>
           </div>
@@ -283,9 +281,7 @@ function readError(error: unknown, fallback: string): string {
       <section class="month-side">
         <div class="month-block cyber-panel">
           <div class="month-block-title">Week Rollup</div>
-          <div v-if="snapshot.related_weeks.length === 0" class="empty-hint">
-            本月还没有周计划落点。
-          </div>
+          <div v-if="snapshot.related_weeks.length === 0" class="empty-hint">本月还没有周计划落点。</div>
           <div v-else class="rollup-list">
             <div v-for="week in snapshot.related_weeks" :key="week.cycle_id" class="rollup-item">
               <div class="rollup-head">
@@ -382,19 +378,20 @@ function readError(error: unknown, fallback: string): string {
 
 .month-main,
 .month-side,
-.month-form,
 .goal-list,
+.month-form,
 .rollup-list {
   display: grid;
   gap: 14px;
 }
 
-.month-block-head {
+.month-block-head,
+.rollup-head,
+.month-form-row {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
-  margin-bottom: 14px;
+  gap: 10px;
+  align-items: center;
 }
 
 .month-block-title {
@@ -405,26 +402,20 @@ function readError(error: unknown, fallback: string): string {
   color: var(--cyber-cyan);
 }
 
-.month-form-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
+.month-form-row :deep(.n-base-selection) {
+  flex: 1;
 }
 
- .rollup-item {
+.rollup-item {
+  display: grid;
+  gap: 6px;
   padding: 12px;
   border: 1px solid rgba(0, 180, 255, 0.18);
-  background: rgba(0, 20, 48, 0.4);
+  background: rgba(0, 28, 60, 0.24);
 }
 
 .rollup-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
   color: var(--cyber-text-primary);
-  font-size: 13px;
   font-weight: 700;
 }
 
@@ -434,14 +425,15 @@ function readError(error: unknown, fallback: string): string {
   }
 }
 
-@media (max-width: 760px) {
-  .month-toolbar,
-  .month-block-head {
+@media (max-width: 720px) {
+  .month-toolbar {
     flex-direction: column;
   }
 
+  .month-block-head,
   .month-form-row {
-    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 </style>

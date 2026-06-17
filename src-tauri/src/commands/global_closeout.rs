@@ -4,7 +4,7 @@ use crate::db::repositories::{
     daily_review_repo, dimension_repo, ledger_repo, record_repo, rule_repo,
 };
 use crate::services::ai_response_service;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::State;
@@ -58,25 +58,25 @@ pub async fn run_global_closeout(
     let score_step = if matches!(scope.as_str(), "day" | "all") {
         run_score_step(&state, &date).await
     } else {
-        skipped_step("当前 scope 不更新今日点数")
+        skipped_step("Current scope does not recalculate today's points")
     };
 
     let report_step = if matches!(scope.as_str(), "day" | "all") {
         run_report_step(&state, &app_data_dir, &date).await
     } else {
-        skipped_step("当前 scope 不生成每日报告")
+        skipped_step("Current scope does not generate the daily report")
     };
 
     let week_step = if matches!(scope.as_str(), "week" | "all") {
         run_plan_step(&state, &date, "week").await
     } else {
-        skipped_step("当前 scope 不更新周计划")
+        skipped_step("Current scope does not refresh the week plan")
     };
 
     let month_step = if matches!(scope.as_str(), "month" | "all") {
         run_plan_step(&state, &date, "month").await
     } else {
-        skipped_step("当前 scope 不更新月计划")
+        skipped_step("Current scope does not refresh the month plan")
     };
 
     let closeout_run_id = {
@@ -101,6 +101,74 @@ pub async fn run_global_closeout(
         month_plan: month_step,
         closeout_run_id,
     })
+}
+
+#[tauri::command]
+pub fn get_latest_closeout_run(
+    state: State<'_, DbState>,
+    date: String,
+) -> Result<Option<GlobalCloseoutResultDto>, String> {
+    ensure_closeout_table(&state)?;
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.query_row(
+        "SELECT
+            date,
+            scope,
+            score_status,
+            score_message,
+            report_status,
+            report_message,
+            report_id,
+            week_status,
+            week_message,
+            week_session_id,
+            month_status,
+            month_message,
+            month_session_id,
+            id
+         FROM closeout_runs
+         WHERE date = ?1
+         ORDER BY id DESC
+         LIMIT 1",
+        params![date],
+        |row| {
+            Ok(GlobalCloseoutResultDto {
+                date: row.get(0)?,
+                scope: row.get(1)?,
+                score: CloseoutStepDto {
+                    status: row.get(2)?,
+                    message: row.get(3)?,
+                    report_id: None,
+                    session_id: None,
+                    questions: Vec::new(),
+                },
+                report: CloseoutStepDto {
+                    status: row.get(4)?,
+                    message: row.get(5)?,
+                    report_id: row.get(6)?,
+                    session_id: None,
+                    questions: Vec::new(),
+                },
+                week_plan: CloseoutStepDto {
+                    status: row.get(7)?,
+                    message: row.get(8)?,
+                    report_id: None,
+                    session_id: row.get(9)?,
+                    questions: Vec::new(),
+                },
+                month_plan: CloseoutStepDto {
+                    status: row.get(10)?,
+                    message: row.get(11)?,
+                    report_id: None,
+                    session_id: row.get(12)?,
+                    questions: Vec::new(),
+                },
+                closeout_run_id: row.get(13)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| e.to_string())
 }
 
 fn ensure_closeout_table(state: &State<'_, DbState>) -> Result<(), String> {
@@ -155,7 +223,11 @@ async fn run_score_step(state: &State<'_, DbState>, date: &str) -> CloseoutStepD
         };
 
         match ledger_repo::has_active_entries_for_date(&conn, date) {
-            Ok(true) => return skipped_step("今天已经有成长账本，跳过点数重算"),
+            Ok(true) => {
+                return skipped_step(
+                    "Today's growth ledger already exists, so point recalculation was skipped",
+                )
+            }
             Ok(false) => {}
             Err(error) => return error_step(error.to_string()),
         }
@@ -169,7 +241,7 @@ async fn run_score_step(state: &State<'_, DbState>, date: &str) -> CloseoutStepD
         };
 
         if records.is_empty() {
-            return skipped_step("今天没有可分析的计时记录");
+            return skipped_step("There are no timed records to analyze today");
         }
 
         let rule_preview = match build_local_rule_preview(&conn, &records) {
@@ -177,11 +249,10 @@ async fn run_score_step(state: &State<'_, DbState>, date: &str) -> CloseoutStepD
             Err(error) => return error_step(error),
         };
 
-        let request_json =
-            match build_daily_analysis_request_json(&conn, date, &records, &rule_preview) {
-                Ok(value) => value,
-                Err(error) => return error_step(error),
-            };
+        let request_json = match build_daily_analysis_request_json(&conn, date, &records, &rule_preview) {
+            Ok(value) => value,
+            Err(error) => return error_step(error),
+        };
 
         (records, rule_preview, request_json)
     };
@@ -189,22 +260,20 @@ async fn run_score_step(state: &State<'_, DbState>, date: &str) -> CloseoutStepD
     let raw_response = match api_proxy::call_scoring_api(state.clone(), request_json).await {
         Ok(response) => response,
         Err(error) => {
-            let fallback_summary =
-                format!("AI 评分请求失败，已自动回退到本地规则缓存。原始问题：{error}");
+            let fallback_summary = format!(
+                "AI scoring failed, so the system wrote points using local rules instead. Original issue: {error}"
+            );
             let conn = match state.0.lock() {
                 Ok(conn) => conn,
                 Err(lock_error) => return error_step(lock_error.to_string()),
             };
 
-            return match confirm_score_items(
-                &conn,
-                date,
-                rule_preview,
-                Some(fallback_summary.as_str()),
-            ) {
-                Ok(()) => success_step("今日成长点数已更新（AI 请求失败，已自动回退到本地规则）"),
+            return match confirm_score_items(&conn, date, rule_preview, Some(fallback_summary.as_str())) {
+                Ok(()) => success_step(
+                    "Today's growth points were updated. AI scoring failed, so local rules were applied automatically",
+                ),
                 Err(confirm_error) => error_step(format!(
-                    "评分请求失败，且本地回退写入失败：{confirm_error}（原始错误：{error}）"
+                    "AI scoring failed, and local fallback writing also failed: {confirm_error} (original issue: {error})"
                 )),
             };
         }
@@ -213,22 +282,20 @@ async fn run_score_step(state: &State<'_, DbState>, date: &str) -> CloseoutStepD
     let parsed: ScoreApiResponse = match parse_score_api_response(&raw_response) {
         Ok(parsed) => parsed,
         Err(error) => {
-            let fallback_summary =
-                format!("AI 评分响应异常，已自动回退到本地规则缓存。原始问题：{error}");
+            let fallback_summary = format!(
+                "AI scoring returned an invalid response, so the system wrote points using local rules instead. Original issue: {error}"
+            );
             let conn = match state.0.lock() {
                 Ok(conn) => conn,
                 Err(lock_error) => return error_step(lock_error.to_string()),
             };
 
-            return match confirm_score_items(
-                &conn,
-                date,
-                rule_preview,
-                Some(fallback_summary.as_str()),
-            ) {
-                Ok(()) => success_step("今日成长点数已更新（AI 评分异常，已自动回退到本地规则）"),
+            return match confirm_score_items(&conn, date, rule_preview, Some(fallback_summary.as_str())) {
+                Ok(()) => success_step(
+                    "Today's growth points were updated. AI response was invalid, so local rules were applied automatically",
+                ),
                 Err(confirm_error) => error_step(format!(
-                    "评分响应解析失败，且本地回退写入失败：{confirm_error}（原始错误：{error}）"
+                    "AI response parsing failed, and local fallback writing also failed: {confirm_error} (original issue: {error})"
                 )),
             };
         }
@@ -262,7 +329,7 @@ async fn run_score_step(state: &State<'_, DbState>, date: &str) -> CloseoutStepD
         Err(error) => return error_step(error.to_string()),
     };
     match confirm_score_items(&conn, date, items, Some(parsed.summary.as_str())) {
-        Ok(()) => success_step("今日成长点数已更新"),
+        Ok(()) => success_step("Today's growth points were updated"),
         Err(error) => error_step(error),
     }
 }
@@ -282,7 +349,7 @@ async fn run_report_step(
     {
         Ok(report) => CloseoutStepDto {
             status: "success".into(),
-            message: "每日报告已生成".into(),
+            message: "Daily report generated".into(),
             report_id: Some(report.id),
             session_id: None,
             questions: Vec::new(),
@@ -296,12 +363,10 @@ async fn run_plan_step(
     date: &str,
     period_type: &str,
 ) -> CloseoutStepDto {
-    match plan::refresh_plan_progress(state.clone(), period_type.to_string(), date.to_string())
-        .await
-    {
+    match plan::refresh_plan_progress(state.clone(), period_type.to_string(), date.to_string()).await {
         Ok(outcome) if outcome.requires_clarification => CloseoutStepDto {
             status: "needs_clarification".into(),
-            message: format!("{period_type} plan 需要补充回答"),
+            message: format!("{period_type} plan needs clarification before it can be applied"),
             report_id: None,
             session_id: Some(outcome.session_id),
             questions: outcome.questions,
@@ -311,14 +376,14 @@ async fn run_plan_step(
                 .proposal
                 .as_ref()
                 .map(|proposal| proposal.ai_summary.trim().to_string())
-                .filter(|summary| !summary.is_empty());
+                .filter(|value| !value.is_empty());
 
             match plan::apply_plan_ai_update(state.clone(), outcome.session_id) {
                 Ok(_) => CloseoutStepDto {
                     status: "success".into(),
                     message: summary
-                        .map(|summary| format!("{period_type} plan 已更新：{summary}"))
-                        .unwrap_or_else(|| format!("{period_type} plan 已更新")),
+                        .map(|value| format!("{period_type} plan updated: {value}"))
+                        .unwrap_or_else(|| format!("{period_type} plan updated")),
                     report_id: None,
                     session_id: Some(outcome.session_id),
                     questions: Vec::new(),
@@ -390,20 +455,20 @@ fn build_local_rule_preview(
                 };
 
                 (
-                    format!("规则缓存: {}", rule.primary_dim),
+                    format!("rule-cache: {}", rule.primary_dim),
                     changes,
                     0.82,
-                    "命中本地规则，已给出受约束建议，等待 API 复核".to_string(),
+                    "matched local rule cache; waiting for AI verification".to_string(),
                 )
             } else {
                 (
-                    "规则缓存: fallback".to_string(),
+                    "rule-cache: fallback".to_string(),
                     vec![score::ScorePreviewChange {
                         dimension_key: "willpower".into(),
                         change_value: 1,
                     }],
                     0.35,
-                    "未命中规则缓存，先给出保守建议，等待 API 复核".to_string(),
+                    "no local rule cache matched, using a conservative suggestion".to_string(),
                 )
             };
 
@@ -429,7 +494,7 @@ fn build_daily_analysis_request_json(
 ) -> Result<String, String> {
     let dims = dimension_repo::get_all_dimensions(conn).map_err(|e| e.to_string())?;
     let rule_hint_summary = format!(
-        "规则缓存已为 {} 条记录生成 {} 点建议，API 需要在这些约束上复核并输出最终反馈。",
+        "The deterministic rules cache produced suggestions for {} records with a total of {} points. The API must stay within these constraints and return the final result.",
         rule_preview.len(),
         rule_preview
             .iter()
@@ -437,7 +502,7 @@ fn build_daily_analysis_request_json(
             .sum::<i32>()
     );
     let suggested_totals = rule_preview.iter().fold(
-        std::collections::HashMap::<String, i32>::new(),
+        std::collections::BTreeMap::<String, i32>::new(),
         |mut totals, item| {
             for change in &item.changes {
                 *totals.entry(change.dimension_key.clone()).or_insert(0) += change.change_value;
@@ -446,15 +511,9 @@ fn build_daily_analysis_request_json(
         },
     );
 
-    serde_json::to_string_pretty(&json!({
+    serde_json::to_string(&json!({
         "version": "1.0",
         "feedback_mode": "rules_api",
-        "date": date,
-        "records": records.iter().map(|record| json!({
-            "title": record.title,
-            "minutes": record.minutes,
-            "difficulty_star": record.difficulty_star,
-        })).collect::<Vec<_>>(),
         "stat_dimensions": dims.iter().map(|dim| json!({
             "key": dim.key,
             "name": dim.name,
@@ -477,11 +536,17 @@ fn build_daily_analysis_request_json(
                 "title": item.title,
                 "category": item.category,
                 "suggested_dimensions": item.changes.iter().map(|change| change.dimension_key.clone()).collect::<Vec<_>>(),
-                "suggested_changes": item.changes.iter().map(|change| (change.dimension_key.clone(), change.change_value)).collect::<std::collections::HashMap<_, _>>(),
+                "suggested_changes": item.changes.iter().map(|change| (change.dimension_key.clone(), change.change_value)).collect::<std::collections::BTreeMap<_, _>>(),
                 "confidence": item.confidence,
                 "reason": item.reason,
             })).collect::<Vec<_>>()
-        }
+        },
+        "records": records.iter().map(|record| json!({
+            "title": record.title,
+            "minutes": record.minutes,
+            "difficulty_star": record.difficulty_star,
+        })).collect::<Vec<_>>(),
+        "date": date
     }))
     .map_err(|e| e.to_string())
 }
@@ -493,7 +558,7 @@ fn confirm_score_items(
     summary: Option<&str>,
 ) -> Result<(), String> {
     if ledger_repo::has_active_entries_for_date(conn, date).map_err(|e| e.to_string())? {
-        return Err("今天已经写入过成长账本".into());
+        return Err("Today's growth ledger has already been written".into());
     }
 
     let dimensions = dimension_repo::get_all_dimensions(conn).map_err(|e| e.to_string())?;
@@ -525,7 +590,7 @@ fn confirm_score_items(
         .iter()
         .any(|item| item.changes.iter().any(|change| change.change_value > 0))
     {
-        return Err("当前没有可写入的成长变化".into());
+        return Err("There are no growth changes left to write".into());
     }
 
     for item in &normalized_items {

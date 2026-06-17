@@ -1,11 +1,6 @@
 import { ref } from "vue";
 import { defineStore } from "pinia";
-import {
-  clearApiKey,
-  getSettings,
-  saveApiKey,
-  saveGeneralSettings,
-} from "@/api/client/tauriCommands";
+import { clearApiKey, getSettings, saveApiKey, saveGeneralSettings } from "@/api/client/tauriCommands";
 import { mapSettingsFromBackend, toGeneralSettingsPayload } from "@/stores/settingMapper";
 
 export type ScoringEngine = "rules_api";
@@ -31,7 +26,7 @@ export const useSettingStore = defineStore("setting", () => {
     try {
       settings.value = mapSettingsFromBackend(await getSettings());
     } catch (error) {
-      console.error("加载设置失败:", error);
+      console.error("Failed to load settings:", error);
     }
   }
 
@@ -39,7 +34,7 @@ export const useSettingStore = defineStore("setting", () => {
     try {
       await saveGeneralSettings(toGeneralSettingsPayload(settings.value));
     } catch (error) {
-      console.error("保存设置失败:", error);
+      console.error("Failed to save settings:", error);
       throw error;
     }
   }
@@ -52,7 +47,7 @@ export const useSettingStore = defineStore("setting", () => {
         apiKeyConfigured: apiKey.trim().length > 0,
       };
     } catch (error) {
-      console.error("保存 API Key 失败:", error);
+      console.error("Failed to save API key:", error);
       throw error;
     }
   }
@@ -65,7 +60,7 @@ export const useSettingStore = defineStore("setting", () => {
         apiKeyConfigured: false,
       };
     } catch (error) {
-      console.error("清除 API Key 失败:", error);
+      console.error("Failed to clear API key:", error);
       throw error;
     }
   }

@@ -54,6 +54,7 @@ pub fn run() {
             import_export::import_json,
             api_proxy::call_scoring_api,
             api_proxy::call_plan_api,
+            api_proxy::get_recent_api_runs,
             plan::get_week_plan,
             plan::get_month_plan,
             plan::get_calendar_plan_history,
@@ -62,6 +63,8 @@ pub fn run() {
             plan::delete_plan_item,
             plan::refresh_plan_progress,
             plan::submit_plan_ai_answers,
+            plan::get_plan_ai_outcome,
+            plan::get_latest_plan_ai_outcome,
             plan::apply_plan_ai_update,
             mind::get_bond_people,
             mind::save_bond_person,
@@ -88,6 +91,7 @@ pub fn run() {
             daily_insight::delete_insight_report,
             daily_insight::get_calendar_insight_history,
             global_closeout::run_global_closeout,
+            global_closeout::get_latest_closeout_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

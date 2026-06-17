@@ -169,14 +169,14 @@ export interface PersonalMemoryOverview {
 
 export interface PersonalContextPack {
   schema_version: string;
-  date: string;
-  mode: string;
-  generated_at: string;
   profile: PersonalProfile;
-  overview: PersonalMemoryOverview;
   high_priority_memories: PersonalMemoryViewItem[];
-  recent_memories: PersonalMemoryViewItem[];
   relevant_memories: PersonalMemoryViewItem[];
+  recent_memories: PersonalMemoryViewItem[];
+  query_relevant_memories: PersonalMemoryViewItem[];
+  overview: PersonalMemoryOverview;
+  mode: string;
+  date: string;
 }
 
 export interface PersonalMemoryPatchApplyResult {
@@ -356,6 +356,24 @@ export interface GlobalCloseoutResult {
   closeout_run_id: number;
 }
 
+export interface ApiRunDiagnostic {
+  id: number;
+  date: string;
+  status: string;
+  error_message: string | null;
+  latency_ms: number | null;
+  engine_name: string;
+  task_kind: string;
+  model_tier: string;
+  fallback_used: boolean;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  prompt_cache_hit_tokens: number | null;
+  prompt_cache_miss_tokens: number | null;
+  finish_reason: string | null;
+  created_at: string;
+}
+
 export async function getRecordsByDate(date: string): Promise<RecordItem[]> {
   return invoke("get_records_by_date", { date });
 }
@@ -448,6 +466,10 @@ export async function previewScoreWithLocalRules(
 
 export async function callScoringApi(requestJson: string): Promise<string> {
   return invoke("call_scoring_api", { requestJson });
+}
+
+export async function getRecentApiRuns(limit = 12): Promise<ApiRunDiagnostic[]> {
+  return invoke("get_recent_api_runs", { limit });
 }
 
 export async function confirmScorePreview(
@@ -714,6 +736,17 @@ export async function refreshPlanProgress(
   return invoke("refresh_plan_progress", { periodType, anchorDate });
 }
 
+export async function getPlanAiOutcome(sessionId: number): Promise<PlanAiOutcome> {
+  return invoke("get_plan_ai_outcome", { sessionId });
+}
+
+export async function getLatestPlanAiOutcome(
+  periodType: PlanPeriodType,
+  anchorDate: string
+): Promise<PlanAiOutcome | null> {
+  return invoke("get_latest_plan_ai_outcome", { periodType, anchorDate });
+}
+
 export async function submitPlanAiAnswers(
   sessionId: number,
   answers: string[]
@@ -730,6 +763,10 @@ export async function runGlobalCloseout(
   scope: "day" | "week" | "month" | "all" = "all"
 ): Promise<GlobalCloseoutResult> {
   return invoke("run_global_closeout", { date, scope });
+}
+
+export async function getLatestCloseoutRun(date: string): Promise<GlobalCloseoutResult | null> {
+  return invoke("get_latest_closeout_run", { date });
 }
 
 export async function saveGeneralSettings(

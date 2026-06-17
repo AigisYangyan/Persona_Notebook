@@ -1,6 +1,7 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import {
+  getLatestCloseoutRun,
   runGlobalCloseout,
   type CloseoutStep,
   type CloseoutStepStatus,
@@ -15,7 +16,7 @@ import { getTodayStr } from "@/utils/date";
 
 const INITIAL_STEP: CloseoutStep = {
   status: "pending",
-  message: "等待执行",
+  message: "Waiting",
   report_id: null,
   session_id: null,
   questions: [],
@@ -55,11 +56,18 @@ export const useCloseoutStore = defineStore("closeout", () => {
     }
   }
 
+  async function loadLatest(date = getTodayStr()) {
+    const latest = await getLatestCloseoutRun(date);
+    result.value = latest ? mapCloseoutResult(latest) : createInitialResult();
+    return result.value;
+  }
+
   return {
     running,
     result,
     hasResult,
     run,
+    loadLatest,
   };
 });
 
@@ -125,11 +133,11 @@ function applyClarificationState(
 
 export function closeoutStatusLabel(status: CloseoutStepStatus): string {
   const map: Record<CloseoutStepStatus, string> = {
-    pending: "等待",
-    skipped: "跳过",
-    success: "完成",
-    needs_clarification: "待回答",
-    error: "失败",
+    pending: "Waiting",
+    skipped: "Skipped",
+    success: "Done",
+    needs_clarification: "Needs Reply",
+    error: "Error",
   };
   return map[status];
 }

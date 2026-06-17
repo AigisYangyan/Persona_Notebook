@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { NButton, NEmpty, NModal, NPopconfirm, NTabPane, NTabs, useMessage } from "naive-ui";
-import { useInsightStore } from "@/stores/insightStore";
 import type { InsightPeriodType, InsightReport } from "@/api/client/tauriCommands";
-import { getTodayStr } from "@/utils/date";
-import { normalizeInsightPeriod, reportKindLabel } from "@/features/insights/periods";
 import { coerceInsightList, coerceInsightText } from "@/features/insights/display";
+import { normalizeInsightPeriod, reportKindLabel } from "@/features/insights/periods";
+import { useInsightStore } from "@/stores/insightStore";
+import { getTodayStr } from "@/utils/date";
 
 const insightStore = useInsightStore();
 const message = useMessage();
+
 const selectedPeriod = ref<InsightPeriodType>("day");
 const anchorDate = ref(getTodayStr());
 const contextVisible = ref(false);
@@ -16,24 +17,26 @@ const contextVisible = ref(false);
 const activeReport = computed(() => insightStore.currentReport);
 const reportPayload = computed(() => readReportPayload(activeReport.value));
 const periodLabel = computed(() => reportKindLabel("report", selectedPeriod.value));
-
 const reportText = computed(() =>
   buildReportText({
-    summary:
-      activeReport.value?.summary ||
-      "报告会结合任务、成长账本、日记、羁绊、周月计划和长期记忆，不只做复盘，也会继续向下挖原因与下一步。",
-    completed: readList(reportPayload.value.completed),
-    unfinished: readList(reportPayload.value.unfinished),
-    timeFocus: readText(reportPayload.value.time_focus),
-    growth: readText(reportPayload.value.growth_changes),
-    plan: readText(reportPayload.value.plan_progress),
-    bond: readText(reportPayload.value.journal_and_bond_observations),
-    root: readText(reportPayload.value.root_causes),
-    leverage: readText(reportPayload.value.leverage_points),
-    remedies: readList(reportPayload.value.concrete_remedies),
-    next: readList(reportPayload.value.next_actions),
-    gaps: readText(reportPayload.value.not_enough_data),
-  }),
+    summary: activeReport.value?.summary || "生成后，这里会出现一份更像心理小助手的陪伴式报告。",
+    emotionalReflection: readText(reportPayload.value.emotional_reflection),
+    comfortMessage: readText(reportPayload.value.comfort_message),
+    pressureSources: readText(reportPayload.value.pressure_sources),
+    innerPattern: readText(reportPayload.value.inner_pattern),
+    selfCompassion: readText(reportPayload.value.self_compassion),
+    gentleQuestions: readList(reportPayload.value.gentle_questions),
+    smallNextSteps: readList(reportPayload.value.small_next_steps),
+    planProgress: readText(reportPayload.value.plan_progress),
+    leveragePoints: readText(reportPayload.value.leverage_points),
+    notEnoughData: readText(reportPayload.value.not_enough_data),
+    completed: readText(reportPayload.value.completed),
+    unfinished: readText(reportPayload.value.unfinished),
+    legacyBond: readText(reportPayload.value.journal_and_bond_observations),
+    legacyRoot: readText(reportPayload.value.root_causes),
+    legacyRemedies: readList(reportPayload.value.concrete_remedies),
+    legacyNext: readList(reportPayload.value.next_actions),
+  })
 );
 
 const reportDense = computed(() => reportText.value.join("").length > 1500);
@@ -69,7 +72,7 @@ async function openContext(report: InsightReport) {
 async function deleteReport(report: InsightReport) {
   try {
     await insightStore.removeReport(report.id, "report", report.period_type);
-    message.success("已删除这条报告记录");
+    message.success("这条报告记录已删除");
   } catch (error) {
     message.error(readError(error, "删除失败"));
   }
@@ -94,34 +97,54 @@ function readText(value: unknown): string {
 
 function buildReportText(input: {
   summary: string;
-  completed: string[];
-  unfinished: string[];
-  timeFocus: string;
-  growth: string;
-  plan: string;
-  bond: string;
-  root: string;
-  leverage: string;
-  remedies: string[];
-  next: string[];
-  gaps: string;
+  emotionalReflection: string;
+  comfortMessage: string;
+  pressureSources: string;
+  innerPattern: string;
+  selfCompassion: string;
+  gentleQuestions: string[];
+  smallNextSteps: string[];
+  planProgress: string;
+  leveragePoints: string;
+  notEnoughData: string;
+  completed: string;
+  unfinished: string;
+  legacyBond: string;
+  legacyRoot: string;
+  legacyRemedies: string[];
+  legacyNext: string[];
 }): string[] {
   const paragraphs = [
-    input.summary,
-    input.completed.length > 0 ? `已完成：${input.completed.join("；")}` : "",
-    input.unfinished.length > 0 ? `未完成：${input.unfinished.join("；")}` : "",
-    input.timeFocus ? `时间重心：${input.timeFocus}` : "",
-    input.growth ? `成长变化：${input.growth}` : "",
-    input.plan ? `计划推进：${input.plan}` : "",
-    input.bond ? `情绪与关系：${input.bond}` : "",
-    input.root ? `问题根因：${input.root}` : "",
-    input.leverage ? `关键支点：${input.leverage}` : "",
-    input.remedies.length > 0 ? `解决措施：${input.remedies.join("；")}` : "",
-    input.next.length > 0 ? `下一步：${input.next.join("；")}` : "",
-    input.gaps ? `数据缺口：${input.gaps}` : "",
+    input.emotionalReflection || input.summary,
+    input.comfortMessage,
+    joinSentences([
+      input.pressureSources ? `今晚真正压着你的，不只是任务本身，还有这些压力线索：${input.pressureSources}` : "",
+      input.innerPattern ? `再往里看一点，你今天反复出现的内在模式可能是：${input.innerPattern}` : "",
+      input.planProgress ? `计划层面的卡顿，也和这些推进状态有关：${input.planProgress}` : "",
+    ]),
+    joinSentences([
+      input.selfCompassion,
+      input.leveragePoints ? `不过你依然留下了一些可用的支点：${input.leveragePoints}` : "",
+      input.legacyBond,
+      input.legacyRoot,
+    ]),
+    input.gentleQuestions.length > 0 ? `如果今晚愿意慢一点，可以轻轻问自己：${input.gentleQuestions.join("；")}` : "",
+    joinSentences([
+      input.smallNextSteps.length > 0 ? `明天不用一下子做很多，先从这几步开始就够了：${input.smallNextSteps.join("；")}` : "",
+      input.legacyRemedies.length > 0 ? `也可以试试这些补救动作：${input.legacyRemedies.join("；")}` : "",
+      input.legacyNext.length > 0 ? `下一步提醒：${input.legacyNext.join("；")}` : "",
+    ]),
+    input.notEnoughData ? `这份判断里仍然有一些数据缺口：${input.notEnoughData}` : "",
+    !input.emotionalReflection && input.completed
+      ? `如果只从记录面看，今天你已经做过这些：${input.completed}${input.unfinished ? `；还有这些还没收尾：${input.unfinished}` : ""}`
+      : "",
   ].filter(Boolean);
 
   return paragraphs.length > 0 ? paragraphs : ["生成后，这里会出现一份完整的单框报告。"];
+}
+
+function joinSentences(parts: string[]): string {
+  return parts.filter(Boolean).join(" ");
 }
 
 function readError(error: unknown, fallback: string): string {
@@ -259,83 +282,69 @@ function readError(error: unknown, fallback: string): string {
 .cabinet-item span,
 .cabinet-item small {
   color: var(--cyber-text-muted);
-  font-size: 11px;
-  letter-spacing: 1.6px;
 }
 
 .report-kind {
-  color: var(--cyber-success);
-  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 2px;
 }
 
 .sheet-heading {
-  flex: 1;
-  min-width: 0;
+  display: grid;
+  gap: 4px;
 }
 
 .sheet-heading h2 {
-  margin: 6px 0 0;
-  color: var(--cyber-text-primary);
-  font-size: 24px;
-  line-height: 1.2;
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.1;
 }
 
 .sheet-content {
   display: grid;
-  gap: 10px;
+  gap: 14px;
+  align-content: start;
 }
 
 .sheet-content p {
   margin: 0;
-  color: var(--cyber-text-secondary);
-  line-height: 1.56;
-  font-size: 13px;
+  line-height: 1.85;
+  font-size: 15px;
+  color: var(--cyber-text-primary);
 }
 
-.dense .sheet-content p {
-  font-size: 12px;
-  line-height: 1.46;
+.report-sheet.dense .sheet-content p {
+  font-size: 14px;
+  line-height: 1.7;
 }
 
 .cabinet {
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
 
 .cabinet-title {
-  color: var(--cyber-cyan);
-  font-weight: 800;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
 }
 
 .cabinet-item {
   display: grid;
-  gap: 4px;
-  text-align: left;
-  padding: 8px;
-  border: 1px solid var(--cyber-border);
-  background: rgba(8, 18, 38, 0.78);
-  color: var(--cyber-text-primary);
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid rgba(0, 180, 255, 0.16);
   cursor: pointer;
+  background: rgba(0, 18, 45, 0.42);
 }
 
-.cabinet-item.active,
-.cabinet-item:hover {
-  border-color: var(--cyber-cyan);
-}
-
-.cabinet-item strong,
-.cabinet-item small {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+.cabinet-item.active {
+  border-color: rgba(0, 212, 255, 0.5);
 }
 
 .cabinet-item strong {
-  -webkit-line-clamp: 2;
-}
-
-.cabinet-item small {
-  -webkit-line-clamp: 2;
+  color: var(--cyber-text-primary);
+  font-size: 13px;
 }
 
 .empty-box {
@@ -344,24 +353,32 @@ function readError(error: unknown, fallback: string): string {
   place-items: center;
 }
 
-.context-modal pre {
+.context-modal :deep(pre) {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
   max-height: 70vh;
   overflow: auto;
-  white-space: pre-wrap;
 }
 
-@media (max-width: 920px) {
+@media (max-width: 1100px) {
   .reports-layout {
     grid-template-columns: 1fr;
+  }
+
+  .cabinet {
+    order: -1;
   }
 }
 
 @media (max-width: 720px) {
-  .page-head,
-  .head-actions,
-  .sheet-head {
-    align-items: flex-start;
+  .page-head {
     flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .head-actions {
+    width: 100%;
   }
 }
 </style>

@@ -1,21 +1,27 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { NButton, NInput, NInputNumber, NModal, NRate, useMessage } from "naive-ui";
 import TaskTimePieChart from "@/components/charts/TaskTimePieChart.vue";
+import PlanAiDialog from "@/components/plans/PlanAiDialog.vue";
 import TodayTaskTreeItem from "@/components/TodayTaskTreeItem.vue";
+import { formatDuration } from "@/features/records/taskMetrics";
 import { closeoutStatusLabel, useCloseoutStore } from "@/stores/closeoutStore";
+import { usePlanStore } from "@/stores/planStore";
 import { useRecordStore } from "@/stores/recordStore";
 import { useStatStore } from "@/stores/statStore";
-import { formatDuration } from "@/features/records/taskMetrics";
 import { getTodayStr } from "@/utils/date";
+
+type ClarificationStepKey = "weekPlan" | "monthPlan";
 
 const recordStore = useRecordStore();
 const statStore = useStatStore();
 const closeoutStore = useCloseoutStore();
+const planStore = usePlanStore();
 const message = useMessage();
 
 const showTaskModal = ref(false);
 const showManualEntryModal = ref(false);
+const showAiDialog = ref(false);
 
 const taskModalParentId = ref<number | null>(null);
 const taskModalTitle = ref("");
@@ -38,10 +44,16 @@ const closeoutSteps = computed(() => [
   { key: "monthPlan", label: "Month Plan", ...closeoutStore.result.monthPlan },
 ]);
 
+watch(
+  () => planStore.aiOutcome,
+  (value) => {
+    showAiDialog.value = Boolean(value);
+  }
+);
+
 onMounted(() => {
   recordStore.startClock();
-  void recordStore.fetchRecords();
-  void statStore.refreshStats();
+  void Promise.all([recordStore.fetchRecords(), statStore.refreshStats(), closeoutStore.loadLatest(getTodayStr())]);
 });
 
 onUnmounted(() => {
@@ -107,7 +119,7 @@ async function handleSubmitManualEntry() {
       manualEntryParentId.value
     );
     showManualEntryModal.value = false;
-    message.success("已导入任务耗时");
+    message.success("任务耗时已导入");
   } catch (error) {
     message.error(readError(error, "导入任务耗时失败"));
   }
@@ -133,10 +145,66 @@ async function handleDailyCloseout() {
     const needsClarification = [result.weekPlan, result.monthPlan].some(
       (step) => step.status === "needs_clarification"
     );
-    message.success(needsClarification ? "夜间收拢完成，周/月计划有追问待回答" : "夜间收拢完成");
+    message.success(needsClarification ? "夜间收拢完成，周/月计划还有待补充回答" : "夜间收拢完成");
   } catch (error) {
     message.error(readError(error, "夜间收拢失败"));
   }
+}
+
+async function openClarification(stepKey: ClarificationStepKey) {
+  const step = closeoutStore.result[stepKey];
+  if (step.status !== "needs_clarification") {
+    return;
+  }
+
+  try {
+    const periodType = stepKey === "weekPlan" ? "week" : "month";
+    if (step.session_id) {
+      await planStore.loadAiOutcome(step.session_id, periodType);
+    } else {
+      const restored = await planStore.restoreLatestAiOutcome(periodType, getTodayStr());
+      if (!restored) {
+        message.warning("暂时没有找到可补答的问题");
+        return;
+      }
+    }
+  } catch (error) {
+    message.error(readError(error, "打开补充回答失败"));
+  }
+}
+
+function handleCloseoutStepClick(stepKey: string) {
+  if (stepKey === "weekPlan" || stepKey === "monthPlan") {
+    void openClarification(stepKey);
+  }
+}
+
+async function submitAiAnswers() {
+  const hasBlank = planStore.aiAnswers.some((answer) => !answer.trim());
+  if (hasBlank) {
+    message.warning("先把问题补充完整");
+    return;
+  }
+  try {
+    await planStore.submitAiAnswers();
+  } catch (error) {
+    message.error(readError(error, "提交回答失败"));
+  }
+}
+
+async function applyAiProposal() {
+  try {
+    await planStore.applyAiProposal();
+    showAiDialog.value = false;
+    await closeoutStore.loadLatest(getTodayStr());
+    message.success("计划 AI 修改已应用");
+  } catch (error) {
+    message.error(readError(error, "应用 AI 修改失败"));
+  }
+}
+
+function updateAiAnswer(index: number, value: string) {
+  planStore.setAiAnswer(index, value);
 }
 
 function getWeekday(): string {
@@ -151,9 +219,7 @@ function readError(error: unknown, fallback: string): string {
 
 <template>
   <div class="cyber-page">
-    <h1 class="cyber-page-title">
-      TODAY RECORD<span class="sub">今日记录</span>
-    </h1>
+    <h1 class="cyber-page-title">TODAY RECORD<span class="sub">今日记录</span></h1>
 
     <div class="today-header cyber-panel">
       <div class="date-section">
@@ -179,7 +245,7 @@ function readError(error: unknown, fallback: string): string {
           </div>
         </button>
         <button class="cyber-btn closeout" :disabled="closeoutStore.running" @click="handleDailyCloseout">
-          <span class="btn-icon">夜</span>
+          <span class="btn-icon">N</span>
           <div class="btn-text">
             <span class="btn-label">夜间收拢</span>
             <span class="btn-sub">GLOBAL CLOSEOUT</span>
@@ -191,16 +257,19 @@ function readError(error: unknown, fallback: string): string {
     <div v-if="closeoutStore.running || closeoutStore.hasResult" class="closeout-panel cyber-panel">
       <div class="cyber-section-title">夜间收拢<span class="sub">DAILY CLOSEOUT</span></div>
       <div class="closeout-steps">
-        <div
+        <button
           v-for="step in closeoutSteps"
           :key="step.key"
           class="closeout-step"
-          :class="step.status"
+          :class="[step.status, { clickable: step.status === 'needs_clarification' }]"
+          :disabled="step.status !== 'needs_clarification'"
+          @click="handleCloseoutStepClick(step.key)"
         >
           <span class="step-label">{{ step.label }}</span>
           <strong>{{ closeoutStatusLabel(step.status) }}</strong>
           <small>{{ step.message || "等待执行" }}</small>
-        </div>
+          <span v-if="step.status === 'needs_clarification'" class="step-action">点击补充回答</span>
+        </button>
       </div>
     </div>
 
@@ -224,12 +293,10 @@ function readError(error: unknown, fallback: string): string {
           </div>
         </div>
 
-        <div class="cyber-section-title">
-          今日任务<span class="sub">TODAY TASKS</span>
-        </div>
+        <div class="cyber-section-title">今日任务<span class="sub">TODAY TASKS</span></div>
         <div class="task-panel cyber-panel">
           <div v-if="recordStore.records.length === 0" class="task-empty">
-            今天还没有任务。可以直接添加任务计时，也可以把外部完成的任务和时间手动导入进来。
+            今天还没有任务。你可以直接新建任务开始计时，也可以把外部完成的任务和耗时手动导入进来。
           </div>
           <div v-else class="task-list">
             <TodayTaskTreeItem
@@ -253,16 +320,12 @@ function readError(error: unknown, fallback: string): string {
           <div class="task-import-row">
             <n-button secondary @click="openManualEntryModal()">补录外部任务时间</n-button>
           </div>
-          <div v-if="mutatingId !== null" class="mutation-hint">
-            正在更新任务 #{{ mutatingId }} ...
-          </div>
+          <div v-if="mutatingId !== null" class="mutation-hint">正在更新任务 #{{ mutatingId }} ...</div>
         </div>
       </section>
 
       <section class="right-column">
-        <div class="cyber-section-title">
-          时间占比<span class="sub">TIME SHARE</span>
-        </div>
+        <div class="cyber-section-title">时间占比<span class="sub">TIME SHARE</span></div>
         <div class="chart-panel cyber-panel">
           <TaskTimePieChart :items="recordStore.chartItems" />
         </div>
@@ -312,6 +375,17 @@ function readError(error: unknown, fallback: string): string {
         <n-button type="primary" block @click="handleSubmitManualEntry">写入记录</n-button>
       </div>
     </n-modal>
+
+    <PlanAiDialog
+      v-model:show="showAiDialog"
+      :outcome="planStore.aiOutcome"
+      :answers="planStore.aiAnswers"
+      :loading="planStore.aiLoading"
+      @update-answer="({ index, value }) => updateAiAnswer(index, value)"
+      @submit-answers="submitAiAnswers"
+      @apply="applyAiProposal"
+      @close="planStore.clearAiState"
+    />
   </div>
 </template>
 
@@ -421,6 +495,11 @@ function readError(error: unknown, fallback: string): string {
   padding: 12px;
   border: 1px solid rgba(0, 180, 255, 0.14);
   background: rgba(0, 18, 45, 0.45);
+  text-align: left;
+}
+
+.closeout-step.clickable {
+  cursor: pointer;
 }
 
 .closeout-step.success {
@@ -445,9 +524,15 @@ function readError(error: unknown, fallback: string): string {
   color: var(--cyber-text-primary);
 }
 
-.closeout-step small {
+.closeout-step small,
+.step-action {
   color: var(--cyber-text-secondary);
   line-height: 1.5;
+}
+
+.step-action {
+  color: var(--cyber-cyan);
+  font-size: 12px;
 }
 
 .today-grid {

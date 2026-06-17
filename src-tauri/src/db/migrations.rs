@@ -93,6 +93,11 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
             task_kind     TEXT NOT NULL DEFAULT 'unknown',
             model_tier    TEXT NOT NULL DEFAULT 'legacy',
             fallback_used INTEGER NOT NULL DEFAULT 0,
+            prompt_tokens INTEGER,
+            completion_tokens INTEGER,
+            prompt_cache_hit_tokens INTEGER,
+            prompt_cache_miss_tokens INTEGER,
+            finish_reason TEXT,
             created_at    TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
         );
 
@@ -372,6 +377,26 @@ fn ensure_api_run_columns(conn: &Connection) -> Result<()> {
         "fallback_used",
         "fallback_used INTEGER NOT NULL DEFAULT 0",
     )?;
+    ensure_column(conn, "api_runs", "prompt_tokens", "prompt_tokens INTEGER")?;
+    ensure_column(
+        conn,
+        "api_runs",
+        "completion_tokens",
+        "completion_tokens INTEGER",
+    )?;
+    ensure_column(
+        conn,
+        "api_runs",
+        "prompt_cache_hit_tokens",
+        "prompt_cache_hit_tokens INTEGER",
+    )?;
+    ensure_column(
+        conn,
+        "api_runs",
+        "prompt_cache_miss_tokens",
+        "prompt_cache_miss_tokens INTEGER",
+    )?;
+    ensure_column(conn, "api_runs", "finish_reason", "finish_reason TEXT")?;
     Ok(())
 }
 

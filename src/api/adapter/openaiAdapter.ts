@@ -8,7 +8,7 @@ export class OpenAIAdapter implements ScoringAdapter {
   name = "Rules + API Feedback Engine";
 
   async score(request: DailyAnalysisRequest): Promise<DailyAnalysisResponse> {
-    const requestJson = JSON.stringify(request, null, 2);
+    const requestJson = JSON.stringify(request);
     const rawResponse = await callScoringApi(requestJson);
     const response = parseScoreResponse(rawResponse);
 

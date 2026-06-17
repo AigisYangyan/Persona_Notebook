@@ -30,13 +30,15 @@ function handleClose() {
     </template>
 
     <div v-if="outcome?.requires_clarification" class="dialog-body">
-      <div class="dialog-copy">AI 还不能稳定理解这组 Goal，先把你的真实意图问清楚再调整。</div>
+      <div class="dialog-copy">
+        AI 还不能稳定理解这组 Goal。先把你的真实意图、最近变化，或者完成标准补充清楚，我们再让它更新计划。
+      </div>
       <div v-for="(question, index) in outcome.questions" :key="`${index}-${question}`" class="qa-block">
         <div class="question">{{ question }}</div>
         <n-input
           :value="answers[index] ?? ''"
           type="textarea"
-          placeholder="在这里补充你的真实意图"
+          placeholder="补充你的真实意图、完成标准，或这周 / 这个月发生的变化"
           :autosize="{ minRows: 2, maxRows: 4 }"
           @update:value="(value) => emit('update-answer', { index, value })"
         />

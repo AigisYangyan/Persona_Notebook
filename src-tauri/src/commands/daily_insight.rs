@@ -1,4 +1,4 @@
-use crate::commands::api_proxy;
+﻿use crate::commands::api_proxy;
 use crate::db::connection::{AppDataDirState, DbState};
 use crate::db::repositories::personal_memory_repo;
 use crate::services::{ai_response_service, rag_memory_service};
@@ -61,6 +61,37 @@ struct ParsedInsightResponse {
 struct PeriodRange {
     start_date: NaiveDate,
     end_date: NaiveDate,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct InsightConstraints<'a> {
+    must_cite_evidence_ids: bool,
+    no_evidence_policy: &'a str,
+    memory_patch_schema: &'a str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct InsightPeriodData {
+    records: Vec<Value>,
+    ledger: Vec<Value>,
+    journals: Vec<Value>,
+    bond_entries: Vec<Value>,
+    plans: Vec<Value>,
+    previous_insight_reports: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct InsightContextPayload<'a> {
+    schema_version: &'a str,
+    constraints: InsightConstraints<'a>,
+    personal_context: crate::models::personal_memory::PersonalContextPack,
+    evidence_index: Vec<Value>,
+    period_data: InsightPeriodData,
+    start_date: String,
+    end_date: String,
+    report_kind: &'a str,
+    period_type: &'a str,
+    generated_at: String,
 }
 
 #[tauri::command]
@@ -154,7 +185,7 @@ async fn generate_insight_report(
     let (snapshot_id, request_json) = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         let context = build_insight_context(&conn, &report_kind, &period_type, &range)?;
-        let context_json = serde_json::to_string_pretty(&context).map_err(|e| e.to_string())?;
+        let context_json = serde_json::to_string(&context).map_err(|e| e.to_string())?;
         let snapshot_id = insert_context_snapshot(
             &conn,
             &report_kind,
@@ -166,70 +197,92 @@ async fn generate_insight_report(
         (snapshot_id, context_json)
     };
 
-    let response_payload = match api_proxy::execute_daily_insight_api_request(
-        &state,
-        request_json.clone(),
-        resolve_insight_task_kind(&report_kind, &period_type),
-    )
-    .await
-    {
-        Ok(payload) => payload,
-        Err(error) => {
-            let conn = state.0.lock().map_err(|e| e.to_string())?;
-            insert_report(
-                &conn,
-                NewInsightReport {
-                    report_kind: &report_kind,
-                    period_type: &period_type,
-                    start_date: &fmt_date(range.start_date),
-                    end_date: &fmt_date(range.end_date),
-                    title: "生成失败",
-                    summary: &error,
-                    content_json: &json!({ "error": error }),
-                    raw_response: "",
-                    context_snapshot_id: Some(snapshot_id),
-                    status: "error",
-                    error_message: Some(&error),
-                    memory_patch_json: None,
-                    memory_patch_apply_status: None,
-                    memory_patch_apply_message: None,
-                },
-            )?;
-            return Err(error);
+    let mut last_error: Option<(String, String)> = None;
+    let mut last_payload: Option<String> = None;
+    let mut last_parsed: Option<ParsedInsightResponse> = None;
+
+    // One retry if the model returns an overly short-but-valid payload.
+    for attempt in 0..2 {
+        let response_payload = match api_proxy::execute_daily_insight_api_request(
+            &state,
+            request_json.clone(),
+            resolve_insight_task_kind(&report_kind, &period_type),
+        )
+        .await
+        {
+            Ok(payload) => payload,
+            Err(error) => {
+                last_error = Some(("Generation Failed".to_string(), error.clone()));
+                last_payload = Some(String::new());
+                break;
+            }
+        };
+
+        let parsed = match parse_insight_response(&response_payload) {
+            Ok(value) => value,
+            Err(error) => {
+                last_error = Some(("Parse Failed".to_string(), error.clone()));
+                last_payload = Some(response_payload);
+                break;
+            }
+        };
+
+        let parsed = ParsedInsightResponse {
+            report: normalize_report_payload(&report_kind, parsed.report),
+            ..parsed
+        };
+
+        match validate_report_payload(&report_kind, &parsed.report) {
+            Ok(()) => {
+                last_payload = Some(response_payload);
+                last_parsed = Some(parsed);
+                break;
+            }
+            Err(error) => {
+                // Retry only for "too short" failures.
+                let can_retry = attempt == 0 && error.to_ascii_lowercase().contains("too short");
+                if can_retry {
+                    continue;
+                }
+                last_error = Some(("Schema Validation Failed".to_string(), error));
+                last_payload = Some(response_payload);
+                break;
+            }
         }
+    }
+
+    let Some(parsed) = last_parsed else {
+        let (title, error) = last_error.unwrap_or_else(|| {
+            (
+                "Generation Failed".to_string(),
+                "daily insight generation failed without a detailed error".to_string(),
+            )
+        });
+        let response_payload = last_payload.unwrap_or_default();
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        insert_report(
+            &conn,
+            NewInsightReport {
+                report_kind: &report_kind,
+                period_type: &period_type,
+                start_date: &fmt_date(range.start_date),
+                end_date: &fmt_date(range.end_date),
+                title: &title,
+                summary: &error,
+                content_json: &json!({ "error": error, "raw_response": response_payload }),
+                raw_response: &response_payload,
+                context_snapshot_id: Some(snapshot_id),
+                status: "error",
+                error_message: Some(&error),
+                memory_patch_json: None,
+                memory_patch_apply_status: None,
+                memory_patch_apply_message: None,
+            },
+        )?;
+        return Err(error);
     };
 
-    let parsed = match parse_insight_response(&response_payload) {
-        Ok(value) => value,
-        Err(error) => {
-            let conn = state.0.lock().map_err(|e| e.to_string())?;
-            insert_report(
-                &conn,
-                NewInsightReport {
-                    report_kind: &report_kind,
-                    period_type: &period_type,
-                    start_date: &fmt_date(range.start_date),
-                    end_date: &fmt_date(range.end_date),
-                    title: "解析失败",
-                    summary: &error,
-                    content_json: &json!({ "error": error, "raw_response": response_payload }),
-                    raw_response: &response_payload,
-                    context_snapshot_id: Some(snapshot_id),
-                    status: "error",
-                    error_message: Some(&error),
-                    memory_patch_json: None,
-                    memory_patch_apply_status: None,
-                    memory_patch_apply_message: None,
-                },
-            )?;
-            return Err(error);
-        }
-    };
-
-    let parsed = ParsedInsightResponse {
-        report: normalize_report_payload(&report_kind, parsed.report),
-        ..parsed
-    };
+    let response_payload = last_payload.unwrap_or_default();
 
     let full_content = serde_json::to_value(&parsed).map_err(|e| e.to_string())?;
     let memory_patch_json = parsed
@@ -340,7 +393,8 @@ fn build_insight_context(
     } else {
         period_type
     };
-    let personal_context =
+    let all_memory_items = personal_memory_repo::list_active_memory_items(conn)?;
+    let mut personal_context =
         personal_memory_repo::build_personal_context_pack(conn, &start_date, mode)?;
     let records = query_records(conn, &start_date, &end_date)?;
     let ledger = query_ledger(conn, &start_date, &end_date)?;
@@ -348,6 +402,37 @@ fn build_insight_context(
     let bonds = query_bond_entries(conn, &start_date, &end_date)?;
     let plans = query_plans(conn, &start_date, &end_date)?;
     let previous_reports = query_previous_reports(conn, 12)?;
+
+    let mut query_texts = Vec::new();
+    for value in records
+        .iter()
+        .chain(journals.iter())
+        .chain(bonds.iter())
+        .chain(plans.iter())
+    {
+        for key in [
+            "title",
+            "content",
+            "description",
+            "item_title",
+            "cycle_title",
+            "cycle_summary",
+            "person_name",
+            "relation_label",
+        ] {
+            if let Some(text) = value.get(key).and_then(Value::as_str) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    query_texts.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+    personal_memory_repo::fill_query_relevant_memories(
+        &mut personal_context,
+        &all_memory_items,
+        &query_texts,
+    );
 
     let evidence_index = collect_evidence(
         &records,
@@ -358,29 +443,31 @@ fn build_insight_context(
         &previous_reports,
     );
 
-    Ok(json!({
-        "schema_version": "1.0",
-        "report_kind": report_kind,
-        "period_type": period_type,
-        "start_date": start_date,
-        "end_date": end_date,
-        "generated_at": Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        "personal_context": personal_context,
-        "evidence_index": evidence_index,
-        "period_data": {
-            "records": records,
-            "ledger": ledger,
-            "journals": journals,
-            "bond_entries": bonds,
-            "plans": plans,
-            "previous_insight_reports": previous_reports
+    let payload = InsightContextPayload {
+        schema_version: "1.0",
+        constraints: InsightConstraints {
+            must_cite_evidence_ids: true,
+            no_evidence_policy: "write insufficient_evidence instead of guessing",
+            memory_patch_schema: "PersonalMemoryPatch v1",
         },
-        "constraints": {
-            "must_cite_evidence_ids": true,
-            "no_evidence_policy": "write insufficient_evidence instead of guessing",
-            "memory_patch_schema": "PersonalMemoryPatch v1"
-        }
-    }))
+        personal_context,
+        evidence_index,
+        period_data: InsightPeriodData {
+            records,
+            ledger,
+            journals,
+            bond_entries: bonds,
+            plans,
+            previous_insight_reports: previous_reports,
+        },
+        start_date,
+        end_date,
+        report_kind,
+        period_type,
+        generated_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+    };
+
+    serde_json::to_value(payload).map_err(|e| e.to_string())
 }
 
 fn query_records(
@@ -557,10 +644,41 @@ fn query_plans(conn: &Connection, start_date: &str, end_date: &str) -> Result<Ve
     Ok(rows)
 }
 
+fn extract_tarot_hint(content_json: &str, title: &str, summary: &str) -> Option<String> {
+    if let Ok(value) = serde_json::from_str::<Value>(content_json) {
+        if let Some(card_name) = value
+            .pointer("/report/card_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            return Some(card_name.to_string());
+        }
+        if let Some(theme) = value
+            .pointer("/report/psychological_theme")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            return Some(theme.chars().take(64).collect());
+        }
+    }
+    let fallback = if !title.trim().is_empty() {
+        title.trim()
+    } else {
+        summary.trim()
+    };
+    if fallback.is_empty() {
+        None
+    } else {
+        Some(fallback.chars().take(64).collect())
+    }
+}
+
 fn query_previous_reports(conn: &Connection, limit: i64) -> Result<Vec<Value>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, report_kind, period_type, start_date, end_date, title, summary, created_at
+            "SELECT id, report_kind, period_type, start_date, end_date, title, summary, content_json, created_at
              FROM insight_reports
              WHERE status = 'success'
              ORDER BY created_at DESC, id DESC
@@ -570,16 +688,26 @@ fn query_previous_reports(conn: &Connection, limit: i64) -> Result<Vec<Value>, S
     let rows = stmt
         .query_map([limit.max(1)], |row| {
             let id: i64 = row.get(0)?;
+            let report_kind: String = row.get(1)?;
+            let title: String = row.get(5)?;
+            let summary: String = row.get(6)?;
+            let content_json: String = row.get(7)?;
+            let tarot_hint = if report_kind == "tarot" {
+                extract_tarot_hint(&content_json, &title, &summary)
+            } else {
+                None
+            };
             Ok(json!({
                 "evidence_id": format!("insight_report:{id}"),
                 "id": id,
-                "report_kind": row.get::<_, String>(1)?,
+                "report_kind": report_kind,
                 "period_type": row.get::<_, String>(2)?,
                 "start_date": row.get::<_, String>(3)?,
                 "end_date": row.get::<_, String>(4)?,
-                "title": row.get::<_, String>(5)?,
-                "summary": row.get::<_, String>(6)?,
-                "created_at": row.get::<_, String>(7)?,
+                "title": title,
+                "summary": summary,
+                "tarot_hint": tarot_hint,
+                "created_at": row.get::<_, String>(8)?,
             }))
         })
         .map_err(|e| e.to_string())?
@@ -622,10 +750,9 @@ fn evidence_label(value: &Value) -> String {
         .or_else(|| value.get("item_title"))
         .or_else(|| value.get("cycle_title"))
         .and_then(Value::as_str)
-        .unwrap_or("未命名证据")
+        .unwrap_or("unnamed-evidence")
         .to_string()
 }
-
 struct NewInsightReport<'a> {
     report_kind: &'a str,
     period_type: &'a str,
@@ -979,27 +1106,128 @@ fn normalize_report_payload(report_kind: &str, report: Value) -> Value {
         normalize_list_field(&mut map, "action");
     } else {
         for key in [
-            "time_focus",
-            "growth_changes",
+            "emotional_reflection",
+            "comfort_message",
+            "pressure_sources",
+            "inner_pattern",
+            "self_compassion",
             "plan_progress",
-            "journal_and_bond_observations",
-            "root_causes",
             "leverage_points",
             "not_enough_data",
+            "completed",
+            "unfinished",
         ] {
             normalize_string_field(&mut map, key);
         }
-        for key in [
-            "completed",
-            "unfinished",
-            "concrete_remedies",
-            "next_actions",
-        ] {
+        for key in ["gentle_questions", "small_next_steps"] {
             normalize_list_field(&mut map, key);
         }
     }
 
     Value::Object(map)
+}
+
+fn validate_report_payload(report_kind: &str, report: &Value) -> Result<(), String> {
+    let map = report
+        .as_object()
+        .ok_or_else(|| "daily insight report payload must be a JSON object".to_string())?;
+
+    let required_string_fields: &[&str] = if report_kind == "tarot" {
+        &[
+            "card_name",
+            "archetype",
+            "psychological_theme",
+            "body_signal",
+            "warm_quote",
+            "encouragement",
+            "risk_reminder",
+            "deeper_reading",
+        ]
+    } else {
+        &[
+            "emotional_reflection",
+            "comfort_message",
+            "pressure_sources",
+            "inner_pattern",
+            "self_compassion",
+        ]
+    };
+
+    for field in required_string_fields {
+        let value = map.get(*field).and_then(Value::as_str).map(str::trim).unwrap_or("");
+        if value.is_empty() {
+            return Err(format!("AI response is missing required field: {field}"));
+        }
+    }
+
+    // Soft minimum length checks to discourage overly short outputs.
+    // The upstream caller may retry once when hitting these.
+    let min_length: &[(&str, usize)] = if report_kind == "tarot" {
+        &[
+            ("encouragement", 80),
+            ("deeper_reading", 180),
+            ("risk_reminder", 40),
+        ]
+    } else {
+        &[
+            ("emotional_reflection", 120),
+            ("inner_pattern", 160),
+            ("comfort_message", 80),
+            ("pressure_sources", 80),
+            ("self_compassion", 80),
+        ]
+    };
+    for (field, min_chars) in min_length {
+        let value = map.get(*field).and_then(Value::as_str).map(str::trim).unwrap_or("");
+        if !value.is_empty() && value.chars().count() < *min_chars {
+            return Err(format!("AI response field is too short: {field}"));
+        }
+    }
+
+    let required_list_fields: &[&str] = if report_kind == "tarot" {
+        &["action"]
+    } else {
+        &["gentle_questions", "small_next_steps"]
+    };
+
+    for field in required_list_fields {
+        let is_valid = map
+            .get(*field)
+            .and_then(Value::as_array)
+            .map(|items| items.iter().any(|item| item.as_str().map(str::trim).unwrap_or("").len() > 0))
+            .unwrap_or(false);
+        if !is_valid {
+            return Err(format!("AI response is missing required list field: {field}"));
+        }
+    }
+
+    if report_kind != "tarot" {
+        for field in ["gentle_questions", "small_next_steps"] {
+            let count = map
+                .get(field)
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter(|item| item.as_str().map(str::trim).unwrap_or("").len() > 0)
+                        .count()
+                })
+                .unwrap_or(0);
+            if count < 3 {
+                return Err(format!("AI response field is too short: {field}"));
+            }
+        }
+    } else if let Some(actions) = map.get("action").and_then(Value::as_array) {
+        let count = actions
+            .iter()
+            .filter(|item| item.as_str().map(str::trim).unwrap_or("").len() > 0)
+            .count();
+        if count < 3 {
+            return Err("AI response field is too short: action".to_string());
+        }
+    }
+
+    Ok(())
 }
 
 fn parse_insight_response(raw_response: &str) -> Result<ParsedInsightResponse, String> {
@@ -1052,12 +1280,12 @@ fn fmt_date(date: NaiveDate) -> String {
 
 fn default_title<'a>(report_kind: &str, period_type: &'a str) -> &'a str {
     if report_kind == "tarot" {
-        "今日心理原型牌"
+        "Daily Tarot"
     } else {
         match period_type {
-            "week" => "本周报告",
-            "month" => "本月报告",
-            _ => "每日报告",
+            "week" => "Weekly Report",
+            "month" => "Monthly Report",
+            _ => "Daily Report",
         }
     }
 }
@@ -1084,65 +1312,87 @@ mod tests {
     #[test]
     fn parses_fenced_ai_json() {
         let parsed = parse_insight_response(
-            r#"```json
-            {
+            r#"{
               "schema_version": "1.0",
-              "title": "今日牌",
-              "summary": "稳住节奏",
-              "report": { "card_name": "力量" },
+              "title": "today-card",
+              "summary": "steady pace",
+              "report": { "card_name": "strength" },
               "memory_delta": { "schema_version": "1.0", "profile_updates": null, "memory_operations": [] }
-            }
-            ```"#,
+            }"#,
         )
         .expect("parse");
-        assert_eq!(parsed.title, "今日牌");
-        assert_eq!(parsed.report["card_name"], "力量");
+        assert_eq!(parsed.title, "today-card");
+        assert_eq!(parsed.report["card_name"], "strength");
     }
-
     #[test]
     fn normalizes_report_object_entries_into_strings() {
         let normalized = normalize_report_payload(
             "report",
             json!({
                 "completed": [
-                    { "description": "完成高数复习", "evidence_ids": ["record:1"] }
+                    { "description": "reviewed math", "evidence_ids": ["record:1"] }
                 ],
                 "unfinished": [
-                    { "item": "背单词", "detail": "没有打卡", "evidence_ids": ["plan_item:1"] }
+                    { "item": "vocab", "detail": "not checked in", "evidence_ids": ["plan_item:1"] }
                 ],
-                "time_focus": {
-                    "description": "时间集中在复变函数和认知天性",
+                "emotional_reflection": {
+                    "description": "felt pressure but stayed in motion",
                     "evidence_ids": ["insight_report:1"]
                 }
             }),
         );
-
-        assert_eq!(normalized["completed"][0], "完成高数复习");
-        assert_eq!(normalized["unfinished"][0], "背单词: 没有打卡");
-        assert_eq!(normalized["time_focus"], "时间集中在复变函数和认知天性");
+        assert_eq!(normalized["completed"], "reviewed math");
+        assert_eq!(normalized["unfinished"], "vocab: not checked in");
+        assert_eq!(normalized["emotional_reflection"], "felt pressure but stayed in motion");
     }
-
     #[test]
     fn normalizes_tarot_action_objects_into_plain_text() {
         let normalized = normalize_report_payload(
             "tarot",
             json!({
-                "card_name": { "title": "隐士" },
+                "card_name": { "title": "hermit" },
                 "action": [
-                    { "item": "写下卡点", "detail": "用 5 分钟写出今天最抗拒的部分" }
+                    { "description": "take 5 minutes to name what you resist" }
                 ],
-                "risk_reminder": { "description": "不要因为焦虑把计划越写越满" }
+                "risk_reminder": { "description": "do not overpack the plan because of anxiety" }
             }),
         );
-
-        assert_eq!(normalized["card_name"], "隐士");
-        assert_eq!(
-            normalized["action"][0],
-            "写下卡点: 用 5 分钟写出今天最抗拒的部分"
-        );
-        assert_eq!(normalized["risk_reminder"], "不要因为焦虑把计划越写越满");
+        assert_eq!(normalized["card_name"], "hermit");
+        assert_eq!(normalized["action"][0], "take 5 minutes to name what you resist");
+        assert_eq!(normalized["risk_reminder"], "do not overpack the plan because of anxiety");
     }
 
+    #[test]
+    fn report_validation_rejects_missing_psychological_fields() {
+        let error = validate_report_payload(
+            "report",
+            &json!({
+                "comfort_message": "be gentle with yourself",
+                "gentle_questions": ["what hurt today?"],
+                "small_next_steps": ["drink water"]
+            }),
+        )
+        .expect_err("missing required fields");
+
+        assert!(error.contains("emotional_reflection"));
+    }
+
+    #[test]
+    fn report_validation_accepts_complete_daily_payload() {
+        validate_report_payload(
+            "report",
+            &json!({
+                "emotional_reflection": "You kept moving under pressure even when your attention was pulled in multiple directions. You showed steadiness instead of chasing perfection. That matters more than the number of boxes checked today.",
+                "comfort_message": "You do not need to do everything tonight. Choose one small step that protects tomorrow's energy, and let the rest be unfinished without guilt.",
+                "pressure_sources": "Exam pressure is present, but the deeper weight is the fear of falling behind and being judged by yourself. The tight timeline makes every decision feel high-stakes, which increases inner friction.",
+                "inner_pattern": "When uncertainty rises, you try to regain control by overplanning. The plan becomes a shield against anxiety, but it also creates more pressure and makes starting feel heavier.",
+                "self_compassion": "Rest is allowed, and rest is also part of progress. You can be serious about growth without being harsh to yourself, especially when the day already asked a lot from you.",
+                "gentle_questions": ["what is the smallest honest next step?", "what felt heavy today?", "what would kindness look like tonight?"],
+                "small_next_steps": ["open the notebook and write one line", "drink water and stretch for two minutes", "pick one task to defer until tomorrow"]
+            }),
+        )
+        .expect("valid payload");
+    }
     #[test]
     fn deleting_report_removes_orphan_context_snapshot() {
         let conn = Connection::open_in_memory().expect("db");
@@ -1150,7 +1400,7 @@ mod tests {
         let snapshot_id =
             insert_context_snapshot(&conn, "report", "day", "2026-06-13", "2026-06-13", "{}")
                 .expect("snapshot");
-        let report_id = insert_test_report(&conn, snapshot_id, "日报");
+        let report_id = insert_test_report(&conn, snapshot_id, "daily-report");
 
         delete_report_and_orphan_context(&conn, report_id).expect("delete");
 
@@ -1169,8 +1419,8 @@ mod tests {
         let snapshot_id =
             insert_context_snapshot(&conn, "report", "day", "2026-06-13", "2026-06-13", "{}")
                 .expect("snapshot");
-        let first_report_id = insert_test_report(&conn, snapshot_id, "日报 A");
-        let _second_report_id = insert_test_report(&conn, snapshot_id, "日报 B");
+        let first_report_id = insert_test_report(&conn, snapshot_id, "daily-report-a");
+        let _second_report_id = insert_test_report(&conn, snapshot_id, "daily-report-b");
 
         delete_report_and_orphan_context(&conn, first_report_id).expect("delete");
 
@@ -1202,3 +1452,7 @@ mod tests {
         .expect("report")
     }
 }
+
+
+
+

@@ -367,6 +367,75 @@ pub fn get_ai_session_by_id(conn: &Connection, id: i64) -> Result<Option<PlanAiS
     .optional()
 }
 
+pub fn get_latest_ai_session_for_cycle(
+    conn: &Connection,
+    cycle_id: i64,
+    status: Option<&str>,
+) -> Result<Option<PlanAiSession>> {
+    match status {
+        Some(value) => conn
+            .query_row(
+                "SELECT
+                    id,
+                    cycle_id,
+                    status,
+                    request_payload,
+                    response_payload,
+                    questions_json,
+                    answers_json,
+                    proposal_json
+                 FROM plan_ai_sessions
+                 WHERE cycle_id = ?1 AND status = ?2
+                 ORDER BY id DESC
+                 LIMIT 1",
+                params![cycle_id, value],
+                |row| {
+                    Ok(PlanAiSession {
+                        id: row.get(0)?,
+                        cycle_id: row.get(1)?,
+                        status: row.get(2)?,
+                        request_payload: row.get(3)?,
+                        response_payload: row.get(4)?,
+                        questions_json: row.get(5)?,
+                        answers_json: row.get(6)?,
+                        proposal_json: row.get(7)?,
+                    })
+                },
+            )
+            .optional(),
+        None => conn
+            .query_row(
+                "SELECT
+                    id,
+                    cycle_id,
+                    status,
+                    request_payload,
+                    response_payload,
+                    questions_json,
+                    answers_json,
+                    proposal_json
+                 FROM plan_ai_sessions
+                 WHERE cycle_id = ?1
+                 ORDER BY id DESC
+                 LIMIT 1",
+                params![cycle_id],
+                |row| {
+                    Ok(PlanAiSession {
+                        id: row.get(0)?,
+                        cycle_id: row.get(1)?,
+                        status: row.get(2)?,
+                        request_payload: row.get(3)?,
+                        response_payload: row.get(4)?,
+                        questions_json: row.get(5)?,
+                        answers_json: row.get(6)?,
+                        proposal_json: row.get(7)?,
+                    })
+                },
+            )
+            .optional(),
+    }
+}
+
 pub fn list_week_cycles_in_range(
     conn: &Connection,
     start_date: &str,
@@ -515,5 +584,31 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].title, "New");
         assert_eq!(items[0].dimension_key.as_deref(), Some("willpower"));
+    }
+
+    #[test]
+    fn get_latest_ai_session_for_cycle_filters_by_status() {
+        let conn = Connection::open_in_memory().expect("open db");
+        run_migrations(&conn).expect("migrate");
+        let cycle = ensure_cycle(&conn, "week", "2026-06-08", "2026-06-14").expect("cycle");
+
+        create_ai_session(&conn, cycle.id, "{}", Some("{}"), "[]", "[]", None, "ready")
+            .expect("ready session");
+        create_ai_session(
+            &conn,
+            cycle.id,
+            "{}",
+            Some("{}"),
+            "[\"question\"]",
+            "[]",
+            None,
+            "clarifying",
+        )
+        .expect("clarifying session");
+
+        let session = get_latest_ai_session_for_cycle(&conn, cycle.id, Some("clarifying"))
+            .expect("query session")
+            .expect("session");
+        assert_eq!(session.status, "clarifying");
     }
 }

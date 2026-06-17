@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { NInput, useMessage } from "naive-ui";
-import type { PersonalProfile } from "@/api/client/tauriCommands";
-import { exportDataJson, importCsv, importJson } from "@/api/client/tauriCommands";
+import type { ApiRunDiagnostic, PersonalProfile } from "@/api/client/tauriCommands";
+import { exportDataJson, getRecentApiRuns, importCsv, importJson } from "@/api/client/tauriCommands";
 import { usePersonalMemoryStore } from "@/stores/personalMemoryStore";
 import { useSettingStore } from "@/stores/settingStore";
 
@@ -33,6 +33,7 @@ const patchJson = ref(
 );
 const sourceContextId = ref("settings-manual");
 const diagnosticOutput = ref("");
+const recentApiRuns = ref<ApiRunDiagnostic[]>([]);
 const profileForm = ref<PersonalProfile>({
   birthday: "",
   personality: "",
@@ -45,10 +46,10 @@ const topMemoryItems = computed(() => personalMemoryStore.overview?.top_items ??
 const memoryStats = computed(() => {
   const overview = personalMemoryStore.overview;
   return [
-    { label: "Total", sub: "总记忆", value: overview?.total_items ?? 0 },
-    { label: "Active", sub: "活跃", value: overview?.active_items ?? 0 },
-    { label: "Pending", sub: "待确认", value: overview?.pending_items ?? 0 },
-    { label: "Rejected", sub: "已拒绝", value: overview?.rejected_items ?? 0 },
+    { label: "Total", sub: "all memory items", value: overview?.total_items ?? 0 },
+    { label: "Active", sub: "usable now", value: overview?.active_items ?? 0 },
+    { label: "Pending", sub: "needs review", value: overview?.pending_items ?? 0 },
+    { label: "Rejected", sub: "not applied", value: overview?.rejected_items ?? 0 },
   ];
 });
 
@@ -58,6 +59,7 @@ onMounted(async () => {
   deepseekFlashModel.value = settingStore.settings.deepseekFlashModel;
   deepseekProModel.value = settingStore.settings.deepseekProModel;
   syncProfileForm();
+  void handleLoadRecentApiRuns();
 });
 
 function syncProfileForm() {
@@ -83,20 +85,32 @@ function downloadJson(filename: string, content: string) {
   URL.revokeObjectURL(url);
 }
 
+function formatCacheHitRate(run: ApiRunDiagnostic): string {
+  const hit = run.prompt_cache_hit_tokens ?? 0;
+  const miss = run.prompt_cache_miss_tokens ?? 0;
+  const total = hit + miss;
+  if (total <= 0) {
+    return "n/a";
+  }
+  return `${Math.round((hit / total) * 100)}%`;
+}
+
+function formatTokenStats(run: ApiRunDiagnostic): string {
+  const prompt = run.prompt_tokens ?? 0;
+  const completion = run.completion_tokens ?? 0;
+  return `${prompt} / ${completion}`;
+}
+
 async function handleSaveApiConfig() {
   savingApiConfig.value = true;
   settingStore.setEngine("rules_api");
-  settingStore.updateApiConfig(
-    deepseekBaseUrl.value,
-    deepseekFlashModel.value,
-    deepseekProModel.value
-  );
+  settingStore.updateApiConfig(deepseekBaseUrl.value, deepseekFlashModel.value, deepseekProModel.value);
   try {
     await settingStore.persistGeneralSettings();
-    message.success("DeepSeek 配置已保存");
+    message.success("DeepSeek config saved");
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error);
-    message.error(`保存失败: ${messageText}`);
+    message.error(`Save failed: ${messageText}`);
   } finally {
     savingApiConfig.value = false;
   }
@@ -104,7 +118,7 @@ async function handleSaveApiConfig() {
 
 async function handleSaveApiKey() {
   if (!apiKey.value.trim()) {
-    message.warning("请输入新的 API Key");
+    message.warning("Please enter a new API key");
     return;
   }
 
@@ -112,10 +126,10 @@ async function handleSaveApiKey() {
   try {
     await settingStore.persistApiKey(apiKey.value.trim());
     apiKey.value = "";
-    message.success("API Key 已更新");
+    message.success("API key updated");
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error);
-    message.error(`保存 API Key 失败: ${messageText}`);
+    message.error(`API key save failed: ${messageText}`);
   } finally {
     savingApiKey.value = false;
   }
@@ -126,10 +140,10 @@ async function handleClearApiKey() {
   try {
     await settingStore.removeApiKey();
     apiKey.value = "";
-    message.success("API Key 已清除");
+    message.success("API key cleared");
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error);
-    message.error(`清除 API Key 失败: ${messageText}`);
+    message.error(`Clear API key failed: ${messageText}`);
   } finally {
     savingApiKey.value = false;
   }
@@ -140,10 +154,10 @@ async function handleSaveProfile() {
   try {
     await personalMemoryStore.saveProfile(profileForm.value);
     syncProfileForm();
-    message.success("个人资料与 RAG 镜像已同步");
+    message.success("Profile and RAG mirror synced");
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error);
-    message.error(`保存个人资料失败: ${messageText}`);
+    message.error(`Save profile failed: ${messageText}`);
   } finally {
     savingProfile.value = false;
   }
@@ -154,7 +168,7 @@ async function handleSearchMemory() {
     await personalMemoryStore.searchMemory(memorySearchQuery.value, [], 20);
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error);
-    message.error(`搜索记忆失败: ${messageText}`);
+    message.error(`Search failed: ${messageText}`);
   }
 }
 
@@ -162,20 +176,20 @@ async function handleBuildContextPack() {
   try {
     const contextPackResult = await personalMemoryStore.generateContextPack(contextDate.value, contextMode.value);
     diagnosticOutput.value = JSON.stringify(contextPackResult, null, 2);
-    message.success("个人上下文包已生成");
+    message.success("Context pack generated");
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error);
-    message.error(`生成上下文包失败: ${messageText}`);
+    message.error(`Build context pack failed: ${messageText}`);
   }
 }
 
 async function handleRebuildMirror() {
   try {
     diagnosticOutput.value = await personalMemoryStore.rebuildMirrorFiles();
-    message.success("rag_memory 文件镜像已重建");
+    message.success("rag_memory mirror rebuilt");
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error);
-    message.error(`重建镜像失败: ${messageText}`);
+    message.error(`Rebuild mirror failed: ${messageText}`);
   }
 }
 
@@ -184,10 +198,10 @@ async function handleExportRagSnapshot() {
     const snapshot = await personalMemoryStore.exportSnapshot();
     diagnosticOutput.value = snapshot;
     downloadJson(`pgrn-rag-memory-${new Date().toISOString().slice(0, 10)}.json`, snapshot);
-    message.success("RAG 快照已导出");
+    message.success("RAG snapshot exported");
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error);
-    message.error(`导出 RAG 快照失败: ${messageText}`);
+    message.error(`Export RAG snapshot failed: ${messageText}`);
   }
 }
 
@@ -196,10 +210,22 @@ async function handleApplyPatch() {
     await personalMemoryStore.applyPatch(patchJson.value, sourceContextId.value.trim() || "settings-manual");
     syncProfileForm();
     diagnosticOutput.value = JSON.stringify(personalMemoryStore.lastPatchResult, null, 2);
-    message.success("Memory patch 已应用");
+    message.success("Memory patch applied");
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error);
-    message.error(`应用 patch 失败: ${messageText}`);
+    message.error(`Apply patch failed: ${messageText}`);
+  }
+}
+
+async function handleLoadRecentApiRuns() {
+  try {
+    const runs = await getRecentApiRuns(12);
+    recentApiRuns.value = runs;
+    diagnosticOutput.value = JSON.stringify(runs, null, 2);
+    message.success("Recent API diagnostics loaded");
+  } catch (error) {
+    const messageText = error instanceof Error ? error.message : String(error);
+    message.error(`Load API diagnostics failed: ${messageText}`);
   }
 }
 
@@ -207,10 +233,10 @@ async function handleExport() {
   try {
     const json = await exportDataJson();
     downloadJson(`pgrn-export-${new Date().toISOString().slice(0, 10)}.json`, json);
-    message.success("完整数据导出成功");
+    message.success("Full data export complete");
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error);
-    message.error(`导出失败: ${messageText}`);
+    message.error(`Export failed: ${messageText}`);
   }
 }
 
@@ -230,21 +256,21 @@ async function handleImportFile(event: Event) {
         : null;
 
     if (!result) {
-      message.error("仅支持 .csv 或 .json 文件");
+      message.error("Only .csv and .json are supported");
       return;
     }
 
     if (result.errors.length > 0) {
-      message.warning(`导入完成: 成功 ${result.imported} 条, 失败 ${result.errors.length} 条`);
+      message.warning(`Import finished: ${result.imported} ok / ${result.errors.length} failed`);
     } else {
-      message.success(`成功导入 ${result.imported} 条记录`);
+      message.success(`Imported ${result.imported} records`);
     }
 
     await personalMemoryStore.loadFoundation();
     syncProfileForm();
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error);
-    message.error(`导入失败: ${messageText}`);
+    message.error(`Import failed: ${messageText}`);
   } finally {
     target.value = "";
   }
@@ -253,23 +279,16 @@ async function handleImportFile(event: Event) {
 
 <template>
   <div class="cyber-page">
-    <h1 class="cyber-page-title">
-      SETTINGS<span class="sub">设置</span>
-    </h1>
+    <h1 class="cyber-page-title">SETTINGS<span class="sub">system config</span></h1>
 
     <div class="settings-grid">
       <section class="settings-section">
-        <div class="cyber-section-title">
-          DEEPSEEK CONFIGURATION<span class="sub">DeepSeek 双档路由</span>
-        </div>
+        <div class="cyber-section-title">DEEPSEEK CONFIGURATION<span class="sub">dual-tier routing</span></div>
         <div class="config-panel cyber-panel">
           <div class="config-status">
             <span class="status-label">API KEY STATUS</span>
-            <span
-              class="status-badge"
-              :class="settingStore.settings.apiKeyConfigured ? 'configured' : 'unconfigured'"
-            >
-              {{ settingStore.settings.apiKeyConfigured ? "已配置" : "未配置" }}
+            <span class="status-badge" :class="settingStore.settings.apiKeyConfigured ? 'configured' : 'unconfigured'">
+              {{ settingStore.settings.apiKeyConfigured ? "configured" : "not configured" }}
             </span>
           </div>
 
@@ -289,14 +308,14 @@ async function handleImportFile(event: Event) {
           </div>
 
           <div class="hint-panel">
-            <div class="hint-line"><strong>flash</strong> = 结构化、快、便宜，用于评分与计划刷新</div>
-            <div class="hint-line"><strong>pro</strong> = 长文、洞察更稳，用于塔罗、日报、周报、月报</div>
-            <div class="hint-line">当前固定路由：评分/计划/澄清走 flash，塔罗与各类报告走 pro</div>
+            <div class="hint-line"><strong>flash</strong> = structured, fast, cheaper. Used for scoring and plan refresh.</div>
+            <div class="hint-line"><strong>pro</strong> = longer writing and steadier insight. Used for tarot and reports.</div>
+            <div class="hint-line">Current route: scoring / plan / clarification use flash, tarot and reports use pro.</div>
           </div>
 
           <div class="form-actions">
             <button class="cyber-btn primary" :disabled="savingApiConfig" @click="handleSaveApiConfig">
-              保存 DeepSeek 配置
+              Save DeepSeek config
             </button>
           </div>
 
@@ -308,27 +327,21 @@ async function handleImportFile(event: Event) {
               <n-input
                 v-model:value="apiKey"
                 type="password"
-                placeholder="输入新的 API Key"
+                placeholder="enter a new API key"
                 show-password-on="click"
               />
             </div>
           </div>
 
           <div class="form-actions">
-            <button class="cyber-btn primary" :disabled="savingApiKey" @click="handleSaveApiKey">
-              更新 API Key
-            </button>
-            <button class="cyber-btn danger" :disabled="savingApiKey" @click="handleClearApiKey">
-              清除 API Key
-            </button>
+            <button class="cyber-btn primary" :disabled="savingApiKey" @click="handleSaveApiKey">Update API key</button>
+            <button class="cyber-btn danger" :disabled="savingApiKey" @click="handleClearApiKey">Clear API key</button>
           </div>
         </div>
       </section>
 
       <section class="settings-section">
-        <div class="cyber-section-title">
-          PERSONAL PROFILE<span class="sub">个人资料与长期上下文</span>
-        </div>
+        <div class="cyber-section-title">PERSONAL PROFILE<span class="sub">long-term context</span></div>
         <div class="profile-panel cyber-panel">
           <div class="profile-grid">
             <div class="form-group">
@@ -347,7 +360,7 @@ async function handleImportFile(event: Event) {
                 :value="profileForm.personality"
                 type="textarea"
                 :autosize="{ minRows: 3, maxRows: 5 }"
-                placeholder="例如：理性、慢热、容易在高压时追求秩序感"
+                placeholder="temperament, pressure response, stable preferences"
                 @update:value="(value) => updateProfileForm('personality', value)"
               />
             </div>
@@ -358,7 +371,7 @@ async function handleImportFile(event: Event) {
                 :value="profileForm.experiences"
                 type="textarea"
                 :autosize="{ minRows: 4, maxRows: 8 }"
-                placeholder="填写重要经历、学习背景、反复出现的生活主题"
+                placeholder="important experiences, study background, recurring life themes"
                 @update:value="(value) => updateProfileForm('experiences', value)"
               />
             </div>
@@ -369,28 +382,21 @@ async function handleImportFile(event: Event) {
                 :value="profileForm.personal_notes"
                 type="textarea"
                 :autosize="{ minRows: 4, maxRows: 10 }"
-                placeholder="补充偏好、禁忌、常见困境、目标倾向等"
+                placeholder="taboos, preferred support style, recurring struggles, direction"
                 @update:value="(value) => updateProfileForm('personal_notes', value)"
               />
             </div>
           </div>
 
           <div class="form-actions">
-            <button class="cyber-btn primary" :disabled="savingProfile" @click="handleSaveProfile">
-              保存个人资料
-            </button>
-            <span class="updated-text">
-              最近同步：
-              {{ personalMemoryStore.profile.updated_at || "尚未同步" }}
-            </span>
+            <button class="cyber-btn primary" :disabled="savingProfile" @click="handleSaveProfile">Save profile</button>
+            <span class="updated-text">Last sync: {{ personalMemoryStore.profile.updated_at || "not yet synced" }}</span>
           </div>
         </div>
       </section>
 
       <section class="settings-section">
-        <div class="cyber-section-title">
-          RAG MEMORY FOUNDATION<span class="sub">浓缩记忆底座</span>
-        </div>
+        <div class="cyber-section-title">RAG MEMORY FOUNDATION<span class="sub">memory base</span></div>
         <div class="memory-panel cyber-panel">
           <div class="stats-grid">
             <div v-for="item in memoryStats" :key="item.label" class="stat-tile">
@@ -403,56 +409,31 @@ async function handleImportFile(event: Event) {
           <div class="memory-actions">
             <div class="form-group compact-grow">
               <label class="form-label">Search Memory</label>
-              <n-input
-                v-model:value="memorySearchQuery"
-                placeholder="搜索 habit / preference / relationship 等记忆"
-              />
+              <n-input v-model:value="memorySearchQuery" placeholder="habit / preference / relationship / goal" />
             </div>
             <button class="cyber-btn primary" :disabled="personalMemoryStore.searching" @click="handleSearchMemory">
-              搜索记忆
+              Search
             </button>
           </div>
 
           <div class="memory-list">
             <div class="list-title">Top Memory Items</div>
-            <div v-if="topMemoryItems.length === 0" class="empty-state">
-              还没有进入长期记忆库的条目。
-            </div>
+            <div v-if="topMemoryItems.length === 0" class="empty-state">No long-term memory items yet.</div>
             <div v-else class="memory-cards">
               <article v-for="item in topMemoryItems" :key="item.id" class="memory-card">
                 <div class="memory-card-head">
                   <div>
                     <div class="memory-title">{{ item.title }}</div>
                     <div class="memory-meta">
-                      {{ item.memory_type }} · {{ item.status }} · evidence {{ item.source_count }}
+                      {{ item.memory_type }} / {{ item.status }} / evidence {{ item.source_count }}
                     </div>
                   </div>
                   <div class="memory-score">{{ item.importance }}</div>
                 </div>
-                <div class="memory-summary">{{ item.summary || item.detail || "暂无摘要" }}</div>
+                <div class="memory-summary">{{ item.summary || item.detail || "no summary" }}</div>
                 <div class="memory-tags">
                   <span v-for="tag in item.tags" :key="tag" class="tag-chip">{{ tag }}</span>
                 </div>
-              </article>
-            </div>
-          </div>
-
-          <div v-if="personalMemoryStore.searchResults.length > 0" class="memory-list">
-            <div class="list-title">Search Results</div>
-            <div class="memory-cards">
-              <article
-                v-for="item in personalMemoryStore.searchResults"
-                :key="`search-${item.id}`"
-                class="memory-card compact"
-              >
-                <div class="memory-card-head">
-                  <div>
-                    <div class="memory-title">{{ item.title }}</div>
-                    <div class="memory-meta">{{ item.memory_type }} · {{ item.last_seen_date || "no date" }}</div>
-                  </div>
-                  <div class="memory-score">{{ item.importance }}</div>
-                </div>
-                <div class="memory-summary">{{ item.summary }}</div>
               </article>
             </div>
           </div>
@@ -460,10 +441,32 @@ async function handleImportFile(event: Event) {
       </section>
 
       <section class="settings-section">
-        <div class="cyber-section-title">
-          DEBUG WORKBENCH<span class="sub">上下文包 / 镜像 / Patch</span>
-        </div>
+        <div class="cyber-section-title">API DIAGNOSTICS<span class="sub">recent model runs</span></div>
         <div class="debug-panel cyber-panel">
+          <div class="form-actions wrap diagnostic-actions">
+            <button class="cyber-btn primary" @click="handleLoadRecentApiRuns">Refresh diagnostics</button>
+          </div>
+
+          <div class="diagnostic-list">
+            <article v-for="run in recentApiRuns" :key="run.id" class="diagnostic-card">
+              <div class="diagnostic-head">
+                <div>
+                  <div class="diagnostic-title">{{ run.task_kind }} / {{ run.model_tier }}</div>
+                  <div class="diagnostic-meta">{{ run.engine_name }} / {{ run.created_at }}</div>
+                </div>
+                <div class="diagnostic-status" :class="run.status">{{ run.status }}</div>
+              </div>
+              <div class="diagnostic-grid">
+                <div>cache hit: {{ formatCacheHitRate(run) }}</div>
+                <div>tokens p/c: {{ formatTokenStats(run) }}</div>
+                <div>finish: {{ run.finish_reason || "n/a" }}</div>
+                <div>fallback: {{ run.fallback_used ? "yes" : "no" }}</div>
+              </div>
+              <div v-if="run.error_message" class="diagnostic-error">{{ run.error_message }}</div>
+            </article>
+            <div v-if="recentApiRuns.length === 0" class="empty-state">No recent API diagnostics yet.</div>
+          </div>
+
           <div class="debug-grid">
             <div class="form-group">
               <label class="form-label">Context Date</label>
@@ -485,15 +488,9 @@ async function handleImportFile(event: Event) {
           </div>
 
           <div class="form-actions wrap">
-            <button class="cyber-btn primary" @click="handleBuildContextPack">
-              构建 Context Pack
-            </button>
-            <button class="cyber-btn primary" @click="handleRebuildMirror">
-              重建 rag_memory 镜像
-            </button>
-            <button class="cyber-btn primary" @click="handleExportRagSnapshot">
-              导出 RAG 快照
-            </button>
+            <button class="cyber-btn primary" @click="handleBuildContextPack">Build Context Pack</button>
+            <button class="cyber-btn primary" @click="handleRebuildMirror">Rebuild rag_memory mirror</button>
+            <button class="cyber-btn primary" @click="handleExportRagSnapshot">Export RAG snapshot</button>
           </div>
 
           <div class="form-group">
@@ -502,18 +499,18 @@ async function handleImportFile(event: Event) {
               v-model:value="patchJson"
               type="textarea"
               :autosize="{ minRows: 10, maxRows: 18 }"
-              placeholder="在这里粘贴 AI 输出的结构化 patch"
+              placeholder="paste a structured AI memory patch here"
             />
           </div>
 
           <div class="form-actions wrap">
             <button class="cyber-btn primary" :disabled="personalMemoryStore.patching" @click="handleApplyPatch">
-              应用 Patch
+              Apply Patch
             </button>
             <div v-if="personalMemoryStore.lastPatchResult" class="patch-status">
               {{ personalMemoryStore.lastPatchResult.apply_status }}
-              · applied {{ personalMemoryStore.lastPatchResult.applied_operations }}
-              · rejected {{ personalMemoryStore.lastPatchResult.rejected_operations }}
+              / applied {{ personalMemoryStore.lastPatchResult.applied_operations }}
+              / rejected {{ personalMemoryStore.lastPatchResult.rejected_operations }}
             </div>
           </div>
 
@@ -524,28 +521,22 @@ async function handleImportFile(event: Event) {
               type="textarea"
               readonly
               :autosize="{ minRows: 10, maxRows: 18 }"
-              placeholder="这里会显示 context pack、manifest 或 patch 结果"
+              placeholder="context pack, API runs, patch result"
             />
           </div>
         </div>
       </section>
 
       <section class="settings-section">
-        <div class="cyber-section-title">
-          DATA MANAGEMENT<span class="sub">完整导出与导入</span>
-        </div>
+        <div class="cyber-section-title">DATA MANAGEMENT<span class="sub">import and export</span></div>
         <div class="data-panel cyber-panel">
           <div class="data-item">
             <div class="data-info">
               <div class="data-title">EXPORT DATA AS JSON</div>
-              <div class="data-desc">导出完整数据库对象</div>
-              <div class="data-hint">
-                包含 records、ledger、plans、bond、journals、personal memory 和公开设置。
-              </div>
+              <div class="data-desc">export the full data object</div>
+              <div class="data-hint">includes records, ledger, plans, bonds, journals, personal memory and public settings</div>
             </div>
-            <button class="cyber-btn primary" @click="handleExport">
-              导出 JSON
-            </button>
+            <button class="cyber-btn primary" @click="handleExport">Export JSON</button>
           </div>
 
           <div class="data-divider"></div>
@@ -553,13 +544,11 @@ async function handleImportFile(event: Event) {
           <div class="data-item">
             <div class="data-info">
               <div class="data-title">IMPORT CSV OR JSON</div>
-              <div class="data-desc">兼容旧记录数组和新的对象导出</div>
-              <div class="data-hint">
-                JSON 导入目前优先恢复 records，并可同步 personal_profile。
-              </div>
+              <div class="data-desc">supports legacy record arrays and object exports</div>
+              <div class="data-hint">JSON import restores records first and may sync personal_profile</div>
             </div>
             <label class="cyber-btn primary file-btn">
-              选择文件
+              Choose File
               <input type="file" accept=".csv,.json" hidden @change="handleImportFile" />
             </label>
           </div>
@@ -574,10 +563,6 @@ async function handleImportFile(event: Event) {
   display: flex;
   flex-direction: column;
   gap: 24px;
-}
-
-.settings-section {
-  position: relative;
 }
 
 .config-panel,
@@ -750,7 +735,10 @@ async function handleImportFile(event: Event) {
 .data-desc,
 .stat-sub,
 .memory-meta,
-.data-hint {
+.data-hint,
+.diagnostic-meta,
+.diagnostic-grid,
+.diagnostic-error {
   font-size: 13px;
   color: var(--cyber-text-dim);
 }
@@ -761,7 +749,9 @@ async function handleImportFile(event: Event) {
   gap: 12px;
 }
 
-.stat-tile {
+.stat-tile,
+.diagnostic-card,
+.memory-card {
   padding: 14px;
   background: rgba(8, 18, 42, 0.88);
   border: 1px solid rgba(0, 212, 255, 0.16);
@@ -782,7 +772,8 @@ async function handleImportFile(event: Event) {
   margin-top: 18px;
 }
 
-.memory-list {
+.memory-list,
+.diagnostic-list {
   margin-top: 18px;
 }
 
@@ -793,18 +784,12 @@ async function handleImportFile(event: Event) {
   margin-top: 10px;
 }
 
-.memory-card {
-  padding: 14px;
-  background: rgba(8, 18, 42, 0.88);
-  border: 1px solid rgba(0, 212, 255, 0.14);
-  border-radius: 6px;
-}
-
 .memory-card.compact {
   padding: 12px;
 }
 
-.memory-card-head {
+.memory-card-head,
+.diagnostic-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -812,7 +797,8 @@ async function handleImportFile(event: Event) {
 }
 
 .memory-title,
-.data-title {
+.data-title,
+.diagnostic-title {
   color: var(--cyber-text-primary);
 }
 
@@ -837,6 +823,43 @@ async function handleImportFile(event: Event) {
   border: 1px solid rgba(0, 212, 255, 0.16);
   font-size: 12px;
   color: var(--cyber-text-secondary);
+}
+
+.diagnostic-list {
+  display: grid;
+  gap: 12px;
+}
+
+.diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  margin-top: 12px;
+}
+
+.diagnostic-status {
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  text-transform: uppercase;
+  font-size: 12px;
+  color: var(--cyber-text-secondary);
+}
+
+.diagnostic-status.success {
+  color: var(--cyber-success);
+  border-color: rgba(0, 255, 170, 0.3);
+}
+
+.diagnostic-status.error {
+  color: var(--cyber-danger);
+  border-color: rgba(255, 51, 102, 0.3);
+}
+
+.diagnostic-error {
+  margin-top: 10px;
+  color: #ff8aa5;
+  line-height: 1.5;
 }
 
 .empty-state {
@@ -869,7 +892,8 @@ async function handleImportFile(event: Event) {
   .profile-grid,
   .debug-grid,
   .stats-grid,
-  .memory-cards {
+  .memory-cards,
+  .diagnostic-grid {
     grid-template-columns: 1fr;
   }
 

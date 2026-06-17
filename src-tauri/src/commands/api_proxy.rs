@@ -1,6 +1,6 @@
 use crate::db::connection::DbState;
 use crate::db::repositories::{api_run_repo, setting_repo};
-use crate::services::ai_response_service;
+use crate::services::ai_response_service::{self, ChatResponseMeta};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tauri::State;
@@ -52,6 +52,45 @@ struct OpenAIRequest {
     messages: Vec<OpenAIMessage>,
     temperature: f32,
     max_tokens: i32,
+    response_format: OpenAIResponseFormat,
+    user: String,
+}
+
+#[derive(Serialize)]
+struct OpenAIResponseFormat {
+    #[serde(rename = "type")]
+    format_type: String,
+}
+
+#[derive(Debug, Clone)]
+struct ApiRequestOptions {
+    max_tokens: i32,
+    temperature: f32,
+}
+
+#[derive(Debug, Clone)]
+struct ApiRequestResult {
+    content: String,
+    _meta: ChatResponseMeta,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiRunDiagnosticDto {
+    pub id: i64,
+    pub date: String,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub latency_ms: Option<i64>,
+    pub engine_name: String,
+    pub task_kind: String,
+    pub model_tier: String,
+    pub fallback_used: bool,
+    pub prompt_tokens: Option<i64>,
+    pub completion_tokens: Option<i64>,
+    pub prompt_cache_hit_tokens: Option<i64>,
+    pub prompt_cache_miss_tokens: Option<i64>,
+    pub finish_reason: Option<String>,
+    pub created_at: String,
 }
 
 const SCORING_SYSTEM_PROMPT: &str = r#"You are the scoring engine for Personal Growth RPG Notebook.
@@ -62,6 +101,7 @@ Rules:
 2. Each task may affect at most 3 dimensions.
 3. Respect the provided daily caps and keep outputs conservative for vague tasks.
 4. Lower confidence when the task title is ambiguous or weakly supported by the request.
+5. Keep category short and keep every reason compact.
 
 Required JSON shape:
 {
@@ -81,10 +121,10 @@ Required JSON shape:
       "changes": { "knowledge": 0 },
       "difficulty_star": 0,
       "confidence": 0.0,
-      "reason": "15-50 word reason"
+      "reason": "short reason, under 24 Chinese chars or 16 English words"
     }
   ],
-  "summary": "0-80 word daily summary"
+  "summary": "short daily summary, under 60 Chinese chars or 40 English words"
 }"#;
 
 const PLAN_SYSTEM_PROMPT: &str = r#"You are the planning adjustment engine for Personal Growth RPG Notebook.
@@ -136,6 +176,7 @@ Global rules:
 3. memory_delta must follow PersonalMemoryPatch v1.
 4. memory_delta must never overwrite birthday.
 5. Warmth and imagination are welcome, but only for expression. Do not fabricate facts.
+6. You may provide psychological interpretation based on profile/memories; treat it as interpretation, not as a factual claim.
 
 Tarot mode:
 - Treat tarot as a psychological archetype card, not fortune telling.
@@ -143,23 +184,33 @@ Tarot mode:
 - The report must include:
   card_name, archetype, psychological_theme, body_signal, warm_quote,
   encouragement, action, risk_reminder, deeper_reading, evidence_ids
-- encouragement should be 2-4 sentences.
-- deeper_reading should be one longer paragraph.
-- action should contain 2-4 executable suggestions.
+- encouragement should be 3-6 sentences (warm, concrete, not generic).
+- deeper_reading should be 2-3 paragraphs (each paragraph should add new insight).
+- action should contain 3-5 executable suggestions, each with a short reason.
+- Whenever possible, connect the interpretation to personal_context.profile and memories (do not invent facts).
 
 Report mode:
 - The report may be daily, weekly, or monthly.
-- It must go beyond recap and include diagnosis, leverage points, and concrete remedies.
+- Daily report should feel like a gentle psychological assistant, not a checklist recap.
+- Start from emotion, pressure, and self-understanding, then end with a few light next steps.
+- Weekly and monthly reports may keep more diagnosis, but still avoid dry bullet-style recaps.
 - The report must include:
-  completed, unfinished, time_focus, growth_changes, plan_progress,
-  journal_and_bond_observations, root_causes, leverage_points,
-  concrete_remedies, not_enough_data, next_actions, evidence_ids
+  emotional_reflection, comfort_message, pressure_sources, inner_pattern,
+  self_compassion, gentle_questions, small_next_steps,
+  optional completed, unfinished, plan_progress, not_enough_data, evidence_ids
+- Style & length targets:
+  - emotional_reflection: at least 3 sentences, grounded in evidence and profile.
+  - inner_pattern: 1-2 paragraphs, name the pattern and the trigger.
+  - comfort_message: 2-4 sentences, specific to the user's context.
+  - pressure_sources: one paragraph, not a list of labels.
+  - gentle_questions: 3-6 questions.
+  - small_next_steps: 3-6 steps; each step includes an explanation why it helps.
 
 Required top-level shape:
 {
   "schema_version": "1.0",
-  "title": "short title",
-  "summary": "short summary",
+  "title": "clear title (not necessarily short)",
+  "summary": "2-4 sentences summary",
   "report": {},
   "memory_delta": {
     "schema_version": "1.0",
@@ -202,19 +253,75 @@ impl AiTaskKind {
 }
 
 #[tauri::command]
+pub fn get_recent_api_runs(
+    state: State<'_, DbState>,
+    limit: Option<i64>,
+) -> Result<Vec<ApiRunDiagnosticDto>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let records = api_run_repo::list_recent_runs(&conn, limit.unwrap_or(12)).map_err(|e| e.to_string())?;
+    Ok(records.into_iter().map(|record| ApiRunDiagnosticDto {
+        id: record.id,
+        date: record.date,
+        status: record.status,
+        error_message: record.error_message,
+        latency_ms: record.latency_ms,
+        engine_name: record.engine_name,
+        task_kind: record.task_kind,
+        model_tier: record.model_tier,
+        fallback_used: record.fallback_used,
+        prompt_tokens: record.prompt_tokens,
+        completion_tokens: record.completion_tokens,
+        prompt_cache_hit_tokens: record.prompt_cache_hit_tokens,
+        prompt_cache_miss_tokens: record.prompt_cache_miss_tokens,
+        finish_reason: record.finish_reason,
+        created_at: record.created_at,
+    }).collect())
+}
+
+#[tauri::command]
 pub async fn call_scoring_api(
     state: State<'_, DbState>,
     request_json: String,
 ) -> Result<String, String> {
-    let content = execute_api_request(
-        &state,
-        request_json,
-        SCORING_SYSTEM_PROMPT,
-        2048,
-        AiTaskKind::Scoring,
-    )
-    .await?;
-    ai_response_service::normalize_ai_json_string(&content, "scoring api")
+    let attempts = [1536, 2560];
+    let mut last_error = None;
+
+    for (index, max_tokens) in attempts.into_iter().enumerate() {
+        let content = match execute_api_request(
+            &state,
+            request_json.clone(),
+            SCORING_SYSTEM_PROMPT,
+            AiTaskKind::Scoring,
+            ApiRequestOptions {
+                max_tokens,
+                temperature: 0.2,
+            },
+        )
+        .await
+        {
+            Ok(result) => result.content,
+            Err(error) => {
+                last_error = Some(error.clone());
+                if index + 1 < attempts.len() && should_retry_scoring_error(&error) {
+                    continue;
+                }
+                return Err(error);
+            }
+        };
+
+        match ai_response_service::normalize_ai_json_string(&content, "scoring api") {
+            Ok(normalized) => return Ok(normalized),
+            Err(error) => {
+                last_error = Some(error.clone());
+                if index + 1 < attempts.len() && should_retry_scoring_error(&error) {
+                    continue;
+                }
+                return Err(error);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| "scoring api failed without a detailed error".to_string()))
 }
 
 #[tauri::command]
@@ -226,11 +333,14 @@ pub async fn call_plan_api(
         &state,
         request_json,
         PLAN_SYSTEM_PROMPT,
-        3072,
         AiTaskKind::PlanRefresh,
+        ApiRequestOptions {
+            max_tokens: 3072,
+            temperature: 0.2,
+        },
     )
     .await?;
-    ai_response_service::normalize_ai_json_string(&content, "plan api")
+    ai_response_service::normalize_ai_json_string(&content.content, "plan api")
 }
 
 pub async fn execute_plan_api_request(
@@ -238,7 +348,18 @@ pub async fn execute_plan_api_request(
     request_json: String,
     task_kind: AiTaskKind,
 ) -> Result<String, String> {
-    execute_api_request(state, request_json, PLAN_SYSTEM_PROMPT, 3072, task_kind).await
+    execute_api_request(
+        state,
+        request_json,
+        PLAN_SYSTEM_PROMPT,
+        task_kind,
+        ApiRequestOptions {
+            max_tokens: 3072,
+            temperature: 0.2,
+        },
+    )
+    .await
+    .map(|result| result.content)
 }
 
 pub async fn execute_daily_insight_api_request(
@@ -246,23 +367,41 @@ pub async fn execute_daily_insight_api_request(
     request_json: String,
     task_kind: AiTaskKind,
 ) -> Result<String, String> {
-    execute_api_request(
-        state,
-        request_json,
-        DAILY_INSIGHT_SYSTEM_PROMPT,
-        4096,
-        task_kind,
-    )
-    .await
+    let attempts = [8192, 12288];
+    let mut last_error = None;
+    for (index, max_tokens) in attempts.into_iter().enumerate() {
+        let result = execute_api_request(
+            state,
+            request_json.clone(),
+            DAILY_INSIGHT_SYSTEM_PROMPT,
+            task_kind,
+            ApiRequestOptions {
+                max_tokens,
+                temperature: 0.6,
+            },
+        )
+        .await;
+        match result {
+            Ok(payload) => return Ok(payload.content),
+            Err(error) => {
+                last_error = Some(error.clone());
+                if index + 1 < attempts.len() && should_retry_insight_error(&error) {
+                    continue;
+                }
+                return Err(error);
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "daily insight api failed without a detailed error".to_string()))
 }
 
 async fn execute_api_request(
     state: &State<'_, DbState>,
     request_json: String,
     system_prompt: &str,
-    max_tokens: i32,
     task_kind: AiTaskKind,
-) -> Result<String, String> {
+    options: ApiRequestOptions,
+) -> Result<ApiRequestResult, String> {
     let started_at = Instant::now();
     let request_date = extract_request_date(&request_json);
 
@@ -282,6 +421,7 @@ async fn execute_api_request(
             Some(&error_message),
             started_at.elapsed().as_millis() as i64,
             &route,
+            None,
         );
         return Err(error_message);
     }
@@ -299,8 +439,12 @@ async fn execute_api_request(
                 content: request_json.clone(),
             },
         ],
-        temperature: 0.2,
-        max_tokens,
+        temperature: options.temperature,
+        max_tokens: options.max_tokens,
+        response_format: OpenAIResponseFormat {
+            format_type: "json_object".into(),
+        },
+        user: "pgrn-local-user".into(),
     };
 
     let client = reqwest::Client::new();
@@ -322,6 +466,7 @@ async fn execute_api_request(
                 Some(&message),
                 started_at.elapsed().as_millis() as i64,
                 &route,
+                None,
             );
             message
         })?;
@@ -338,6 +483,7 @@ async fn execute_api_request(
             Some(&message),
             started_at.elapsed().as_millis() as i64,
             &route,
+            None,
         );
         message
     })?;
@@ -353,11 +499,12 @@ async fn execute_api_request(
             Some(&message),
             started_at.elapsed().as_millis() as i64,
             &route,
+            None,
         );
         return Err(message);
     }
 
-    let content = ai_response_service::extract_chat_content(&text).map_err(|error| {
+    let response_payload = ai_response_service::extract_chat_response(&text).map_err(|error| {
         persist_api_run(
             state,
             &request_date,
@@ -367,6 +514,7 @@ async fn execute_api_request(
             Some(&error),
             started_at.elapsed().as_millis() as i64,
             &route,
+            None,
         );
         error
     })?;
@@ -375,14 +523,18 @@ async fn execute_api_request(
         state,
         &request_date,
         &request_json,
-        Some(&content),
+        Some(&response_payload.content),
         "success",
         None,
         started_at.elapsed().as_millis() as i64,
         &route,
+        Some(&response_payload.meta),
     );
 
-    Ok(content)
+    Ok(ApiRequestResult {
+        content: response_payload.content,
+        _meta: response_payload.meta,
+    })
 }
 
 fn resolve_ai_route(
@@ -505,6 +657,7 @@ fn persist_api_run(
     error_message: Option<&str>,
     latency_ms: i64,
     route: &ResolvedAiRoute,
+    meta: Option<&ChatResponseMeta>,
 ) {
     if let Ok(conn) = state.0.lock() {
         let _ = api_run_repo::create_run(
@@ -519,8 +672,32 @@ fn persist_api_run(
             route.task_kind.as_str(),
             route.resolved_tier.as_str(),
             route.fallback_used,
+            meta.and_then(|value| value.usage.prompt_tokens),
+            meta.and_then(|value| value.usage.completion_tokens),
+            meta.and_then(|value| value.usage.prompt_cache_hit_tokens),
+            meta.and_then(|value| value.usage.prompt_cache_miss_tokens),
+            meta.and_then(|value| value.finish_reason.as_deref()),
         );
     }
+}
+
+fn should_retry_scoring_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("truncated")
+        || lower.contains("empty content")
+        || lower.contains("schema mismatch")
+        || lower.contains("not valid json")
+        || lower.contains("eof while parsing")
+}
+
+fn should_retry_insight_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("truncated")
+        || lower.contains("finish_reason=length")
+        || lower.contains("empty content")
+        || lower.contains("schema mismatch")
+        || lower.contains("not valid json")
+        || lower.contains("eof while parsing")
 }
 
 #[cfg(test)]
@@ -580,5 +757,35 @@ mod tests {
         let error = resolve_ai_route(&conn, AiTaskKind::Tarot).expect_err("missing model");
 
         assert!(error.contains("DeepSeek model is not configured"));
+    }
+
+    #[test]
+    fn scoring_retry_detector_matches_truncation_and_eof() {
+        assert!(should_retry_scoring_error(
+            "Model output was truncated (finish_reason=length)"
+        ));
+        assert!(should_retry_scoring_error("EOF while parsing a value at line 1 column 0"));
+        assert!(!should_retry_scoring_error("rate limit exceeded"));
+    }
+
+    #[test]
+    fn openai_request_serializes_json_mode_and_user() {
+        let request = OpenAIRequest {
+            model: "deepseek-chat".into(),
+            messages: vec![OpenAIMessage {
+                role: "user".into(),
+                content: "{}".into(),
+            }],
+            temperature: 0.2,
+            max_tokens: 512,
+            response_format: OpenAIResponseFormat {
+                format_type: "json_object".into(),
+            },
+            user: "pgrn-local-user".into(),
+        };
+
+        let value = serde_json::to_value(&request).expect("serialize request");
+        assert_eq!(value["response_format"]["type"], "json_object");
+        assert_eq!(value["user"], "pgrn-local-user");
     }
 }

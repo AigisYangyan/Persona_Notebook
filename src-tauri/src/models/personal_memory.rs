@@ -67,15 +67,18 @@ pub struct PersonalMemoryOverview {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersonalContextPack {
+    // Field order is cache-sensitive: stable identity first, volatile/context last.
+    // DeepSeek prefix caching keys on a byte-identical prefix, so `profile`
+    // (rarely changing) is kept at the front and timestamps are removed.
     pub schema_version: String,
-    pub date: String,
-    pub mode: String,
-    pub generated_at: String,
     pub profile: PersonalProfile,
-    pub overview: PersonalMemoryOverview,
     pub high_priority_memories: Vec<PersonalMemoryViewItem>,
-    pub recent_memories: Vec<PersonalMemoryViewItem>,
     pub relevant_memories: Vec<PersonalMemoryViewItem>,
+    pub recent_memories: Vec<PersonalMemoryViewItem>,
+    pub query_relevant_memories: Vec<PersonalMemoryViewItem>,
+    pub overview: PersonalMemoryOverview,
+    pub mode: String,
+    pub date: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -54,12 +54,6 @@ export function buildDailyAnalysisRequest(
   return {
     version: "1.0",
     feedback_mode: "rules_api",
-    date,
-    records: analyzableRecords.map((record) => ({
-      title: record.title,
-      minutes: record.minutes,
-      difficulty_star: record.difficulty_star,
-    })),
     stat_dimensions: DEFAULT_STAT_DIMENSIONS,
     score_rules: DEFAULT_SCORE_RULES,
     rule_hints: {
@@ -76,5 +70,11 @@ export function buildDailyAnalysisRequest(
         reason: item.reason,
       })),
     },
+    records: analyzableRecords.map((record) => ({
+      title: record.title,
+      minutes: record.minutes,
+      difficulty_star: record.difficulty_star,
+    })),
+    date,
   };
 }

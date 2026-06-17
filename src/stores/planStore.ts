@@ -3,6 +3,8 @@ import { defineStore } from "pinia";
 import {
   applyPlanAiUpdate,
   deletePlanItem,
+  getLatestPlanAiOutcome,
+  getPlanAiOutcome,
   getMonthPlan,
   getWeekPlan,
   refreshPlanProgress,
@@ -145,6 +147,32 @@ export const usePlanStore = defineStore("plan", () => {
     aiAnswers.value = outcome.questions.map(() => "");
   }
 
+  async function loadAiOutcome(sessionId: number, periodType: PlanPeriodType) {
+    aiLoading.value = true;
+    try {
+      const outcome = await getPlanAiOutcome(sessionId);
+      setAiOutcome(periodType, outcome);
+      return outcome;
+    } finally {
+      aiLoading.value = false;
+    }
+  }
+
+  async function restoreLatestAiOutcome(periodType: PlanPeriodType, anchorDate?: string) {
+    aiLoading.value = true;
+    try {
+      const outcome = await getLatestPlanAiOutcome(periodType, anchorDate ?? getAnchorDate(periodType));
+      if (!outcome) {
+        clearAiState();
+        return null;
+      }
+      setAiOutcome(periodType, outcome);
+      return outcome;
+    } finally {
+      aiLoading.value = false;
+    }
+  }
+
   function setAiAnswer(index: number, value: string) {
     aiAnswers.value = aiAnswers.value.map((answer, currentIndex) =>
       currentIndex === index ? value : answer
@@ -189,5 +217,7 @@ export const usePlanStore = defineStore("plan", () => {
     clearAiState,
     setAiOutcome,
     setAiAnswer,
+    loadAiOutcome,
+    restoreLatestAiOutcome,
   };
 });

@@ -1,5 +1,25 @@
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UsageStats {
+    pub prompt_tokens: Option<i64>,
+    pub completion_tokens: Option<i64>,
+    pub prompt_cache_hit_tokens: Option<i64>,
+    pub prompt_cache_miss_tokens: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatResponseMeta {
+    pub finish_reason: Option<String>,
+    pub usage: UsageStats,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatResponseContent {
+    pub content: String,
+    pub meta: ChatResponseMeta,
+}
 
 pub fn clean_json_payload(raw: &str) -> String {
     let trimmed = raw.trim().trim_start_matches('\u{feff}').trim();
@@ -43,6 +63,10 @@ pub fn normalize_ai_json_string(raw: &str, label: &str) -> Result<String, String
 }
 
 pub fn extract_chat_content(response_text: &str) -> Result<String, String> {
+    extract_chat_response(response_text).map(|payload| payload.content)
+}
+
+pub fn extract_chat_response(response_text: &str) -> Result<ChatResponseContent, String> {
     let envelope: Value = serde_json::from_str(response_text)
         .map_err(|error| format!("Failed to parse API envelope: {error}"))?;
 
@@ -58,11 +82,12 @@ pub fn extract_chat_content(response_text: &str) -> Result<String, String> {
         .first()
         .ok_or_else(|| "API envelope returned no choices".to_string())?;
 
-    if choice
+    let finish_reason = choice
         .get("finish_reason")
         .and_then(Value::as_str)
-        .is_some_and(|finish_reason| finish_reason == "length")
-    {
+        .map(str::to_string);
+
+    if finish_reason.as_deref().is_some_and(|reason| reason == "length") {
         return Err("Model output was truncated (finish_reason=length)".to_string());
     }
 
@@ -73,7 +98,16 @@ pub fn extract_chat_content(response_text: &str) -> Result<String, String> {
         .get("content")
         .ok_or_else(|| "API envelope missing message.content".to_string())?;
 
-    extract_content_text(content).ok_or_else(|| "API returned empty content".to_string())
+    let content = extract_content_text(content).ok_or_else(|| "API returned empty content".to_string())?;
+    let usage = extract_usage_stats(&envelope);
+
+    Ok(ChatResponseContent {
+        content,
+        meta: ChatResponseMeta {
+            finish_reason,
+            usage,
+        },
+    })
 }
 
 fn extract_content_text(content: &Value) -> Option<String> {
@@ -114,6 +148,20 @@ fn looks_truncated_json(clean: &str, error_message: &str) -> bool {
     error_message.contains("EOF while parsing")
         || brace_delta(clean, '{', '}') > 0
         || brace_delta(clean, '[', ']') > 0
+}
+
+fn extract_usage_stats(envelope: &Value) -> UsageStats {
+    let usage = envelope.get("usage").unwrap_or(&Value::Null);
+    UsageStats {
+        prompt_tokens: usage.get("prompt_tokens").and_then(Value::as_i64),
+        completion_tokens: usage.get("completion_tokens").and_then(Value::as_i64),
+        prompt_cache_hit_tokens: usage
+            .get("prompt_cache_hit_tokens")
+            .and_then(Value::as_i64),
+        prompt_cache_miss_tokens: usage
+            .get("prompt_cache_miss_tokens")
+            .and_then(Value::as_i64),
+    }
 }
 
 fn brace_delta(input: &str, open: char, close: char) -> i32 {
@@ -164,6 +212,23 @@ mod tests {
         )
         .expect("extract content");
         assert_eq!(content, "{\"ok\":true}");
+    }
+
+    #[test]
+    fn extracts_chat_meta_and_usage() {
+        let payload = extract_chat_response(
+            r#"{
+              "choices":[{"message":{"content":"{\"ok\":true}"},"finish_reason":"stop"}],
+              "usage":{"prompt_tokens":128,"completion_tokens":64,"prompt_cache_hit_tokens":96,"prompt_cache_miss_tokens":32}
+            }"#,
+        )
+        .expect("extract payload");
+        assert_eq!(payload.content, "{\"ok\":true}");
+        assert_eq!(payload.meta.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(payload.meta.usage.prompt_tokens, Some(128));
+        assert_eq!(payload.meta.usage.completion_tokens, Some(64));
+        assert_eq!(payload.meta.usage.prompt_cache_hit_tokens, Some(96));
+        assert_eq!(payload.meta.usage.prompt_cache_miss_tokens, Some(32));
     }
 
     #[test]
