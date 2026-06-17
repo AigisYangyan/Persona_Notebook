@@ -6,6 +6,7 @@ pub struct PersonalProfile {
     pub personality: String,
     pub experiences: String,
     pub personal_notes: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
 }
 

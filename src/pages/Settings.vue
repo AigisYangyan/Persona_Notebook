@@ -95,6 +95,15 @@ function formatCacheHitRate(run: ApiRunDiagnostic): string {
   return `${Math.round((hit / total) * 100)}%`;
 }
 
+function formatCacheTokenStats(run: ApiRunDiagnostic): string {
+  const hit = run.prompt_cache_hit_tokens;
+  const miss = run.prompt_cache_miss_tokens;
+  if (hit == null && miss == null) {
+    return "n/a";
+  }
+  return `hit ${hit ?? 0} / miss ${miss ?? 0}`;
+}
+
 function formatTokenStats(run: ApiRunDiagnostic): string {
   const prompt = run.prompt_tokens ?? 0;
   const completion = run.completion_tokens ?? 0;
@@ -457,7 +466,7 @@ async function handleImportFile(event: Event) {
                 <div class="diagnostic-status" :class="run.status">{{ run.status }}</div>
               </div>
               <div class="diagnostic-grid">
-                <div>cache hit: {{ formatCacheHitRate(run) }}</div>
+                <div>cache: {{ formatCacheTokenStats(run) }} ({{ formatCacheHitRate(run) }})</div>
                 <div>tokens p/c: {{ formatTokenStats(run) }}</div>
                 <div>finish: {{ run.finish_reason || "n/a" }}</div>
                 <div>fallback: {{ run.fallback_used ? "yes" : "no" }}</div>

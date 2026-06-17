@@ -1,7 +1,7 @@
 {
   "name": "pgrn",
   "private": true,
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Local-first desktop notebook for structured personal growth scoring and review.",
   "license": "Apache-2.0",
   "type": "module",

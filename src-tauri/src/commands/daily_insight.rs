@@ -184,8 +184,7 @@ async fn generate_insight_report(
     let range = resolve_period_range(&period_type, &anchor_date)?;
     let (snapshot_id, request_json) = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let context = build_insight_context(&conn, &report_kind, &period_type, &range)?;
-        let context_json = serde_json::to_string(&context).map_err(|e| e.to_string())?;
+        let context_json = build_insight_context(&conn, &report_kind, &period_type, &range)?;
         let snapshot_id = insert_context_snapshot(
             &conn,
             &report_kind,
@@ -385,7 +384,7 @@ fn build_insight_context(
     report_kind: &str,
     period_type: &str,
     range: &PeriodRange,
-) -> Result<Value, String> {
+) -> Result<String, String> {
     let start_date = fmt_date(range.start_date);
     let end_date = fmt_date(range.end_date);
     let mode = if report_kind == "tarot" {
@@ -467,7 +466,24 @@ fn build_insight_context(
         generated_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
     };
 
-    serde_json::to_value(payload).map_err(|e| e.to_string())
+    serialize_insight_context(&payload)
+}
+
+/// Serialize the top-level insight context for DeepSeek API calls.
+///
+/// Cache-sensitive: struct field order must be preserved byte-for-byte across
+/// repeated requests. Never route this payload through `serde_json::to_value`
+/// or `json!` before sending — that destroys order and collapses cache hits.
+fn serialize_insight_context(payload: &InsightContextPayload<'_>) -> Result<String, String> {
+    serde_json::to_string(payload).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+fn cache_stable_prefix(request_json: &str) -> &str {
+    request_json
+        .rfind("\"generated_at\"")
+        .map(|idx| &request_json[..idx])
+        .unwrap_or(request_json)
 }
 
 fn query_records(
@@ -1393,6 +1409,129 @@ mod tests {
         )
         .expect("valid payload");
     }
+    #[test]
+    fn serializes_insight_context_in_cache_safe_order() {
+        use crate::models::personal_memory::{
+            PersonalContextPack, PersonalMemoryOverview, PersonalProfile,
+        };
+
+        let payload = InsightContextPayload {
+            schema_version: "1.0",
+            constraints: InsightConstraints {
+                must_cite_evidence_ids: true,
+                no_evidence_policy: "write insufficient_evidence instead of guessing",
+                memory_patch_schema: "PersonalMemoryPatch v1",
+            },
+            personal_context: PersonalContextPack {
+                schema_version: "1.0".to_string(),
+                profile: PersonalProfile::default(),
+                high_priority_memories: vec![],
+                relevant_memories: vec![],
+                recent_memories: vec![],
+                query_relevant_memories: vec![],
+                overview: PersonalMemoryOverview {
+                    total_items: 0,
+                    active_items: 0,
+                    pending_items: 0,
+                    rejected_items: 0,
+                    top_items: vec![],
+                },
+                mode: "tarot".to_string(),
+                date: "2026-06-13".to_string(),
+            },
+            evidence_index: vec![],
+            period_data: InsightPeriodData {
+                records: vec![],
+                ledger: vec![],
+                journals: vec![],
+                bond_entries: vec![],
+                plans: vec![],
+                previous_insight_reports: vec![],
+            },
+            start_date: "2026-06-13".to_string(),
+            end_date: "2026-06-13".to_string(),
+            report_kind: "tarot",
+            period_type: "day",
+            generated_at: "2026-06-13 12:00:00".to_string(),
+        };
+
+        let json = serialize_insight_context(&payload).expect("serialize");
+        assert!(
+            json.starts_with("{\"schema_version\":\"1.0\",\"constraints\":"),
+            "unexpected prefix: {}",
+            &json[..json.len().min(120)]
+        );
+
+        let ordered_fields = [
+            "schema_version",
+            "constraints",
+            "personal_context",
+            "evidence_index",
+            "period_data",
+            "start_date",
+            "end_date",
+            "report_kind",
+            "period_type",
+            "generated_at",
+        ];
+        let mut last_pos = 0usize;
+        for field in ordered_fields {
+            let needle = format!("\"{field}\"");
+            let pos = json[last_pos..]
+                .find(&needle)
+                .map(|offset| last_pos + offset)
+                .unwrap_or_else(|| panic!("missing field {field}"));
+            assert!(
+                pos >= last_pos,
+                "field {field} is out of cache-safe order in {json}"
+            );
+            last_pos = pos;
+        }
+
+        let generated_at_pos = json.find("\"generated_at\"").expect("generated_at");
+        let personal_context_pos = json
+            .find("\"personal_context\"")
+            .expect("personal_context");
+        let period_data_pos = json.find("\"period_data\"").expect("period_data");
+        assert!(generated_at_pos > personal_context_pos);
+        assert!(generated_at_pos > period_data_pos);
+        assert!(json.ends_with("\"generated_at\":\"2026-06-13 12:00:00\"}"));
+    }
+
+    #[test]
+    fn builds_repeatable_insight_context_prefix() {
+        use crate::db::repositories::personal_memory_repo;
+        use crate::models::personal_memory::PersonalProfile;
+
+        let conn = Connection::open_in_memory().expect("db");
+        run_migrations(&conn).expect("migrations");
+        personal_memory_repo::save_personal_profile(
+            &conn,
+            &PersonalProfile {
+                birthday: "2000-01-01".to_string(),
+                personality: "steady".to_string(),
+                experiences: "cache prefix test".to_string(),
+                personal_notes: "stable serialization".to_string(),
+                updated_at: None,
+            },
+        )
+        .expect("profile");
+
+        let range = resolve_period_range("day", "2026-06-13").expect("range");
+        let first = build_insight_context(&conn, "tarot", "day", &range).expect("first");
+        let second = build_insight_context(&conn, "tarot", "day", &range).expect("second");
+
+        assert_eq!(
+            cache_stable_prefix(&first),
+            cache_stable_prefix(&second),
+            "prefix before generated_at must be byte-identical across rebuilds"
+        );
+        assert!(
+            first.contains("\"generated_at\"") && second.contains("\"generated_at\""),
+            "generated_at must remain the final cache-volatile field"
+        );
+    }
+
     #[test]
     fn deleting_report_removes_orphan_context_snapshot() {
         let conn = Connection::open_in_memory().expect("db");
