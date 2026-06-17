@@ -67,6 +67,48 @@ pub struct PersonalMemoryOverview {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyMemoryDigest {
+    pub profile: PersonalProfile,
+    pub high_priority_memories: Vec<PersonalMemoryViewItem>,
+    pub relevant_memories: Vec<PersonalMemoryViewItem>,
+    pub recent_memories: Vec<PersonalMemoryViewItem>,
+    pub query_relevant_memories: Vec<PersonalMemoryViewItem>,
+    pub overview: PersonalMemoryOverview,
+}
+
+#[derive(Serialize)]
+pub struct DailyMemoryDigestSummary<'a> {
+    pub high_priority_memories: &'a Vec<PersonalMemoryViewItem>,
+    pub relevant_memories: &'a Vec<PersonalMemoryViewItem>,
+    pub recent_memories: &'a Vec<PersonalMemoryViewItem>,
+    pub query_relevant_memories: &'a Vec<PersonalMemoryViewItem>,
+    pub overview: &'a PersonalMemoryOverview,
+}
+
+impl DailyMemoryDigest {
+    pub fn from_pack(pack: &PersonalContextPack) -> Self {
+        Self {
+            profile: pack.profile.clone(),
+            high_priority_memories: pack.high_priority_memories.clone(),
+            relevant_memories: pack.relevant_memories.clone(),
+            recent_memories: pack.recent_memories.clone(),
+            query_relevant_memories: pack.query_relevant_memories.clone(),
+            overview: pack.overview.clone(),
+        }
+    }
+
+    pub fn memory_summary(&self) -> DailyMemoryDigestSummary<'_> {
+        DailyMemoryDigestSummary {
+            high_priority_memories: &self.high_priority_memories,
+            relevant_memories: &self.relevant_memories,
+            recent_memories: &self.recent_memories,
+            query_relevant_memories: &self.query_relevant_memories,
+            overview: &self.overview,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersonalContextPack {
     // Field order is cache-sensitive: stable identity first, volatile/context last.
     // DeepSeek prefix caching keys on a byte-identical prefix, so `profile`

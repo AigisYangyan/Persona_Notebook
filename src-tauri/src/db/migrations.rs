@@ -308,7 +308,24 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
 
     ensure_record_columns(conn)?;
     ensure_api_run_columns(conn)?;
+    ensure_daily_memory_digest(conn)?;
     init_default_data(conn)?;
+    Ok(())
+}
+
+fn ensure_daily_memory_digest(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS daily_memory_digest (
+            date         TEXT NOT NULL PRIMARY KEY,
+            profile_json TEXT NOT NULL,
+            digest_json  TEXT NOT NULL,
+            created_at   TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+        );
+        DELETE FROM daily_memory_digest
+        WHERE date < date('now', 'localtime', '-7 days');
+        ",
+    )?;
     Ok(())
 }
 

@@ -1,7 +1,7 @@
 use crate::models::personal_memory::{
-    PersonalContextPack, PersonalMemoryItem, PersonalMemoryOverview, PersonalMemoryPatch,
-    PersonalMemoryPatchApplyResult, PersonalMemoryPatchOperation, PersonalMemorySource,
-    PersonalMemoryViewItem, PersonalProfile,
+    DailyMemoryDigest, PersonalContextPack, PersonalMemoryItem, PersonalMemoryOverview,
+    PersonalMemoryPatch, PersonalMemoryPatchApplyResult, PersonalMemoryPatchOperation,
+    PersonalMemorySource, PersonalMemoryViewItem, PersonalProfile,
 };
 use crate::services::ai_response_service;
 use chrono::{Duration, Local, NaiveDate};
@@ -29,7 +29,9 @@ fn tokenize_query(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for token in tokens {
         // For long CJK blocks, generate a few 2-char shingles to improve recall.
-        let is_cjk = token.chars().any(|ch| ('\u{4E00}'..='\u{9FFF}').contains(&ch));
+        let is_cjk = token
+            .chars()
+            .any(|ch| ('\u{4E00}'..='\u{9FFF}').contains(&ch));
         if is_cjk {
             let chars = token.chars().collect::<Vec<_>>();
             if chars.len() >= 2 {
@@ -284,7 +286,13 @@ pub fn build_personal_context_pack(
         "tarot" => &["recurring_pattern", "relationship", "caution", "habit"],
         // Planning contexts: habit/goal context.
         "week" | "month" => &["goal_context", "habit", "recurring_pattern", "relationship"],
-        _ => &["habit", "recurring_pattern", "relationship", "goal_context", "caution"],
+        _ => &[
+            "habit",
+            "recurring_pattern",
+            "relationship",
+            "goal_context",
+            "caution",
+        ],
     };
     let mut relevant_memories = all_items
         .iter()
@@ -426,11 +434,144 @@ pub fn fill_query_relevant_memories(
             .then_with(|| b.last_seen_date.cmp(&a.last_seen_date))
             .then_with(|| a.id.cmp(&b.id))
     });
-    pack.query_relevant_memories = scored
-        .into_iter()
-        .take(15)
-        .map(|(_, item)| item)
-        .collect();
+    pack.query_relevant_memories = scored.into_iter().take(15).map(|(_, item)| item).collect();
+}
+
+pub fn get_or_create_daily_digest(
+    conn: &Connection,
+    date: &str,
+) -> Result<DailyMemoryDigest, String> {
+    if let Some(digest) = load_daily_digest(conn, date)? {
+        return Ok(digest);
+    }
+
+    let all_memory_items = list_active_memory_items(conn)?;
+    let mut pack = build_personal_context_pack(conn, date, "day")?;
+    let query_texts = collect_daily_query_texts(conn, date)?;
+    fill_query_relevant_memories(&mut pack, &all_memory_items, &query_texts);
+    let digest = DailyMemoryDigest::from_pack(&pack);
+
+    let profile_json = serde_json::to_string(&digest.profile).map_err(|e| e.to_string())?;
+    let digest_json = serde_json::to_string(&digest).map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO daily_memory_digest (date, profile_json, digest_json) VALUES (?1, ?2, ?3)",
+        params![date, profile_json, digest_json],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(digest)
+}
+
+fn load_daily_digest(conn: &Connection, date: &str) -> Result<Option<DailyMemoryDigest>, String> {
+    conn.query_row(
+        "SELECT digest_json FROM daily_memory_digest WHERE date = ?1",
+        params![date],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())?
+    .map(|digest_json| {
+        serde_json::from_str::<DailyMemoryDigest>(&digest_json).map_err(|e| e.to_string())
+    })
+    .transpose()
+}
+
+fn collect_daily_query_texts(conn: &Connection, date: &str) -> Result<Vec<String>, String> {
+    let mut query_texts = Vec::new();
+
+    let mut stmt = conn
+        .prepare("SELECT title FROM records WHERE date = ?1 ORDER BY id")
+        .map_err(|e| e.to_string())?;
+    for title in stmt
+        .query_map(params![date], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+    {
+        push_query_text(&mut query_texts, &title.map_err(|e| e.to_string())?);
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT title, content FROM daily_journals WHERE entry_date = ?1 ORDER BY id",
+        )
+        .map_err(|e| e.to_string())?;
+    for row in stmt
+        .query_map(params![date], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?
+    {
+        let (title, content) = row.map_err(|e| e.to_string())?;
+        push_query_text(&mut query_texts, &title);
+        push_query_text(&mut query_texts, &content);
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT e.title, e.content, p.name, p.relation_label
+             FROM bond_entries e
+             JOIN bond_people p ON p.id = e.person_id
+             WHERE e.entry_date = ?1
+             ORDER BY e.id",
+        )
+        .map_err(|e| e.to_string())?;
+    for row in stmt
+        .query_map(params![date], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+    {
+        let (title, content, person_name, relation_label) = row.map_err(|e| e.to_string())?;
+        push_query_text(&mut query_texts, &title);
+        push_query_text(&mut query_texts, &content);
+        push_query_text(&mut query_texts, &person_name);
+        push_query_text(&mut query_texts, &relation_label);
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT c.title, c.summary, i.title, i.description
+             FROM plan_cycles c
+             LEFT JOIN plan_items i ON i.cycle_id = c.id
+             WHERE c.start_date <= ?1 AND c.end_date >= ?1
+             ORDER BY c.id, i.id",
+        )
+        .map_err(|e| e.to_string())?;
+    for row in stmt
+        .query_map(params![date], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+    {
+        let (cycle_title, cycle_summary, item_title, description) =
+            row.map_err(|e| e.to_string())?;
+        push_query_text(&mut query_texts, &cycle_title);
+        push_query_text(&mut query_texts, &cycle_summary);
+        if let Some(text) = item_title {
+            push_query_text(&mut query_texts, &text);
+        }
+        if let Some(text) = description {
+            push_query_text(&mut query_texts, &text);
+        }
+    }
+
+    Ok(query_texts)
+}
+
+fn push_query_text(query_texts: &mut Vec<String>, text: &str) {
+    let trimmed = text.trim();
+    if !trimmed.is_empty() {
+        query_texts.push(trimmed.to_string());
+    }
 }
 
 pub fn apply_memory_patch(

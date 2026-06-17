@@ -574,7 +574,7 @@ export async function rebuildRagMemoryFiles(): Promise<string> {
 }
 
 export async function generateTarotInsight(date: string): Promise<InsightReport> {
-  return invoke("generate_tarot_insight", { date });
+  return invoke<InsightReport>("generate_tarot_insight", { date });
 }
 
 export async function generatePeriodReport(

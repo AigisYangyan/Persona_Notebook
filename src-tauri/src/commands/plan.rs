@@ -455,7 +455,9 @@ pub fn get_latest_plan_ai_outcome(
 
     let session = plan_repo::get_latest_ai_session_for_cycle(&conn, cycle.id, Some("clarifying"))
         .map_err(|e| e.to_string())?;
-    session.map(|value| map_session_to_outcome(&value)).transpose()
+    session
+        .map(|value| map_session_to_outcome(&value))
+        .transpose()
 }
 
 #[tauri::command]
@@ -509,8 +511,11 @@ fn snapshot_lock<'a>(
     state.0.lock().map_err(|e| e.to_string())
 }
 
-fn map_session_to_outcome(session: &crate::models::plan::PlanAiSession) -> Result<PlanAiOutcomeDto, String> {
-    let questions: Vec<String> = serde_json::from_str(&session.questions_json).map_err(|e| e.to_string())?;
+fn map_session_to_outcome(
+    session: &crate::models::plan::PlanAiSession,
+) -> Result<PlanAiOutcomeDto, String> {
+    let questions: Vec<String> =
+        serde_json::from_str(&session.questions_json).map_err(|e| e.to_string())?;
     let proposal = session
         .proposal_json
         .as_deref()

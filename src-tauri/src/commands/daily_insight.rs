@@ -1,6 +1,7 @@
-﻿use crate::commands::api_proxy;
+﻿use crate::commands::api_proxy::{self, DAILY_INSIGHT_SYSTEM_PROMPT};
 use crate::db::connection::{AppDataDirState, DbState};
 use crate::db::repositories::personal_memory_repo;
+use crate::models::personal_memory::DailyMemoryDigest;
 use crate::services::{ai_response_service, rag_memory_service};
 use chrono::{Datelike, Duration, Local, NaiveDate};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -81,10 +82,9 @@ struct InsightPeriodData {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct InsightContextPayload<'a> {
+struct UserContextPayload<'a> {
     schema_version: &'a str,
     constraints: InsightConstraints<'a>,
-    personal_context: crate::models::personal_memory::PersonalContextPack,
     evidence_index: Vec<Value>,
     period_data: InsightPeriodData,
     start_date: String,
@@ -182,18 +182,25 @@ async fn generate_insight_report(
     anchor_date: String,
 ) -> Result<InsightReportDto, String> {
     let range = resolve_period_range(&period_type, &anchor_date)?;
-    let (snapshot_id, request_json) = {
+    let (snapshot_id, system_prompt, request_json) = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let context_json = build_insight_context(&conn, &report_kind, &period_type, &range)?;
+        let (system_prompt, user_json) = build_insight_context(
+            &conn,
+            &report_kind,
+            &period_type,
+            &range,
+            &anchor_date,
+        )?;
+        let snapshot_json = format!("{system_prompt}\n---\n{user_json}");
         let snapshot_id = insert_context_snapshot(
             &conn,
             &report_kind,
             &period_type,
             &fmt_date(range.start_date),
             &fmt_date(range.end_date),
-            &context_json,
+            &snapshot_json,
         )?;
-        (snapshot_id, context_json)
+        (snapshot_id, system_prompt, user_json)
     };
 
     let mut last_error: Option<(String, String)> = None;
@@ -204,6 +211,7 @@ async fn generate_insight_report(
     for attempt in 0..2 {
         let response_payload = match api_proxy::execute_daily_insight_api_request(
             &state,
+            system_prompt.clone(),
             request_json.clone(),
             resolve_insight_task_kind(&report_kind, &period_type),
         )
@@ -384,54 +392,20 @@ fn build_insight_context(
     report_kind: &str,
     period_type: &str,
     range: &PeriodRange,
-) -> Result<String, String> {
+    digest_date: &str,
+) -> Result<(String, String), String> {
     let start_date = fmt_date(range.start_date);
     let end_date = fmt_date(range.end_date);
-    let mode = if report_kind == "tarot" {
-        "tarot"
-    } else {
-        period_type
-    };
-    let all_memory_items = personal_memory_repo::list_active_memory_items(conn)?;
-    let mut personal_context =
-        personal_memory_repo::build_personal_context_pack(conn, &start_date, mode)?;
+    let digest = personal_memory_repo::get_or_create_daily_digest(conn, digest_date)?;
+    let system_prompt = build_system_prompt_with_identity(&digest);
+
     let records = query_records(conn, &start_date, &end_date)?;
     let ledger = query_ledger(conn, &start_date, &end_date)?;
     let journals = query_journals(conn, &start_date, &end_date)?;
     let bonds = query_bond_entries(conn, &start_date, &end_date)?;
     let plans = query_plans(conn, &start_date, &end_date)?;
-    let previous_reports = query_previous_reports(conn, 12)?;
-
-    let mut query_texts = Vec::new();
-    for value in records
-        .iter()
-        .chain(journals.iter())
-        .chain(bonds.iter())
-        .chain(plans.iter())
-    {
-        for key in [
-            "title",
-            "content",
-            "description",
-            "item_title",
-            "cycle_title",
-            "cycle_summary",
-            "person_name",
-            "relation_label",
-        ] {
-            if let Some(text) = value.get(key).and_then(Value::as_str) {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    query_texts.push(trimmed.to_string());
-                }
-            }
-        }
-    }
-    personal_memory_repo::fill_query_relevant_memories(
-        &mut personal_context,
-        &all_memory_items,
-        &query_texts,
-    );
+    let previous_reports =
+        query_previous_reports(conn, 12, report_kind, period_type, &start_date, &end_date)?;
 
     let evidence_index = collect_evidence(
         &records,
@@ -442,14 +416,13 @@ fn build_insight_context(
         &previous_reports,
     );
 
-    let payload = InsightContextPayload {
+    let payload = UserContextPayload {
         schema_version: "1.0",
         constraints: InsightConstraints {
             must_cite_evidence_ids: true,
             no_evidence_policy: "write insufficient_evidence instead of guessing",
             memory_patch_schema: "PersonalMemoryPatch v1",
         },
-        personal_context,
         evidence_index,
         period_data: InsightPeriodData {
             records,
@@ -466,15 +439,26 @@ fn build_insight_context(
         generated_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
     };
 
-    serialize_insight_context(&payload)
+    let user_json = serialize_user_context(&payload)?;
+    Ok((system_prompt, user_json))
 }
 
-/// Serialize the top-level insight context for DeepSeek API calls.
+fn build_system_prompt_with_identity(digest: &DailyMemoryDigest) -> String {
+    let profile_json = serde_json::to_string(&digest.profile).unwrap_or_default();
+    let memory_json = serde_json::to_string(&digest.memory_summary()).unwrap_or_default();
+    format!(
+        "{DAILY_INSIGHT_SYSTEM_PROMPT}\n\n\
+         ---\nUser Profile:\n{profile_json}\n\n\
+         ---\nMemory Context:\n{memory_json}"
+    )
+}
+
+/// Serialize the user insight context for DeepSeek API calls.
 ///
 /// Cache-sensitive: struct field order must be preserved byte-for-byte across
 /// repeated requests. Never route this payload through `serde_json::to_value`
 /// or `json!` before sending — that destroys order and collapses cache hits.
-fn serialize_insight_context(payload: &InsightContextPayload<'_>) -> Result<String, String> {
+fn serialize_user_context(payload: &UserContextPayload<'_>) -> Result<String, String> {
     serde_json::to_string(payload).map_err(|e| e.to_string())
 }
 
@@ -565,7 +549,7 @@ fn query_journals(
             "SELECT id, entry_date, title, content, mood
              FROM daily_journals
              WHERE entry_date BETWEEN ?1 AND ?2
-             ORDER BY entry_date",
+             ORDER BY entry_date, id",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -691,41 +675,63 @@ fn extract_tarot_hint(content_json: &str, title: &str, summary: &str) -> Option<
     }
 }
 
-fn query_previous_reports(conn: &Connection, limit: i64) -> Result<Vec<Value>, String> {
+fn query_previous_reports(
+    conn: &Connection,
+    limit: i64,
+    current_report_kind: &str,
+    current_period_type: &str,
+    current_start_date: &str,
+    current_end_date: &str,
+) -> Result<Vec<Value>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, report_kind, period_type, start_date, end_date, title, summary, content_json, created_at
              FROM insight_reports
              WHERE status = 'success'
+               AND NOT (
+                   report_kind = ?1
+                   AND period_type = ?2
+                   AND start_date = ?3
+                   AND end_date = ?4
+               )
              ORDER BY created_at DESC, id DESC
-             LIMIT ?1",
+             LIMIT ?5",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([limit.max(1)], |row| {
-            let id: i64 = row.get(0)?;
-            let report_kind: String = row.get(1)?;
-            let title: String = row.get(5)?;
-            let summary: String = row.get(6)?;
-            let content_json: String = row.get(7)?;
-            let tarot_hint = if report_kind == "tarot" {
-                extract_tarot_hint(&content_json, &title, &summary)
-            } else {
-                None
-            };
-            Ok(json!({
-                "evidence_id": format!("insight_report:{id}"),
-                "id": id,
-                "report_kind": report_kind,
-                "period_type": row.get::<_, String>(2)?,
-                "start_date": row.get::<_, String>(3)?,
-                "end_date": row.get::<_, String>(4)?,
-                "title": title,
-                "summary": summary,
-                "tarot_hint": tarot_hint,
-                "created_at": row.get::<_, String>(8)?,
-            }))
-        })
+        .query_map(
+            params![
+                current_report_kind,
+                current_period_type,
+                current_start_date,
+                current_end_date,
+                limit.max(1)
+            ],
+            |row| {
+                let id: i64 = row.get(0)?;
+                let report_kind: String = row.get(1)?;
+                let title: String = row.get(5)?;
+                let summary: String = row.get(6)?;
+                let content_json: String = row.get(7)?;
+                let tarot_hint = if report_kind == "tarot" {
+                    extract_tarot_hint(&content_json, &title, &summary)
+                } else {
+                    None
+                };
+                Ok(json!({
+                    "evidence_id": format!("insight_report:{id}"),
+                    "id": id,
+                    "report_kind": report_kind,
+                    "period_type": row.get::<_, String>(2)?,
+                    "start_date": row.get::<_, String>(3)?,
+                    "end_date": row.get::<_, String>(4)?,
+                    "title": title,
+                    "summary": summary,
+                    "tarot_hint": tarot_hint,
+                    "created_at": row.get::<_, String>(8)?,
+                }))
+            },
+        )
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
@@ -740,7 +746,7 @@ fn collect_evidence(
     plans: &[Value],
     previous_reports: &[Value],
 ) -> Vec<Value> {
-    groups
+    let mut items = groups
         .iter()
         .chain(ledger)
         .chain(journals)
@@ -756,7 +762,13 @@ fn collect_evidence(
                 })
             })
         })
-        .collect()
+        .collect::<Vec<_>>();
+    items.sort_by(|a, b| {
+        a.get("evidence_id")
+            .and_then(Value::as_str)
+            .cmp(&b.get("evidence_id").and_then(Value::as_str))
+    });
+    items
 }
 
 fn evidence_label(value: &Value) -> String {
@@ -1170,7 +1182,11 @@ fn validate_report_payload(report_kind: &str, report: &Value) -> Result<(), Stri
     };
 
     for field in required_string_fields {
-        let value = map.get(*field).and_then(Value::as_str).map(str::trim).unwrap_or("");
+        let value = map
+            .get(*field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
         if value.is_empty() {
             return Err(format!("AI response is missing required field: {field}"));
         }
@@ -1194,7 +1210,11 @@ fn validate_report_payload(report_kind: &str, report: &Value) -> Result<(), Stri
         ]
     };
     for (field, min_chars) in min_length {
-        let value = map.get(*field).and_then(Value::as_str).map(str::trim).unwrap_or("");
+        let value = map
+            .get(*field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
         if !value.is_empty() && value.chars().count() < *min_chars {
             return Err(format!("AI response field is too short: {field}"));
         }
@@ -1210,10 +1230,16 @@ fn validate_report_payload(report_kind: &str, report: &Value) -> Result<(), Stri
         let is_valid = map
             .get(*field)
             .and_then(Value::as_array)
-            .map(|items| items.iter().any(|item| item.as_str().map(str::trim).unwrap_or("").len() > 0))
+            .map(|items| {
+                items
+                    .iter()
+                    .any(|item| item.as_str().map(str::trim).unwrap_or("").len() > 0)
+            })
             .unwrap_or(false);
         if !is_valid {
-            return Err(format!("AI response is missing required list field: {field}"));
+            return Err(format!(
+                "AI response is missing required list field: {field}"
+            ));
         }
     }
 
@@ -1359,7 +1385,10 @@ mod tests {
         );
         assert_eq!(normalized["completed"], "reviewed math");
         assert_eq!(normalized["unfinished"], "vocab: not checked in");
-        assert_eq!(normalized["emotional_reflection"], "felt pressure but stayed in motion");
+        assert_eq!(
+            normalized["emotional_reflection"],
+            "felt pressure but stayed in motion"
+        );
     }
     #[test]
     fn normalizes_tarot_action_objects_into_plain_text() {
@@ -1374,8 +1403,14 @@ mod tests {
             }),
         );
         assert_eq!(normalized["card_name"], "hermit");
-        assert_eq!(normalized["action"][0], "take 5 minutes to name what you resist");
-        assert_eq!(normalized["risk_reminder"], "do not overpack the plan because of anxiety");
+        assert_eq!(
+            normalized["action"][0],
+            "take 5 minutes to name what you resist"
+        );
+        assert_eq!(
+            normalized["risk_reminder"],
+            "do not overpack the plan because of anxiety"
+        );
     }
 
     #[test]
@@ -1410,34 +1445,13 @@ mod tests {
         .expect("valid payload");
     }
     #[test]
-    fn serializes_insight_context_in_cache_safe_order() {
-        use crate::models::personal_memory::{
-            PersonalContextPack, PersonalMemoryOverview, PersonalProfile,
-        };
-
-        let payload = InsightContextPayload {
+    fn serializes_user_context_in_cache_safe_order() {
+        let payload = UserContextPayload {
             schema_version: "1.0",
             constraints: InsightConstraints {
                 must_cite_evidence_ids: true,
                 no_evidence_policy: "write insufficient_evidence instead of guessing",
                 memory_patch_schema: "PersonalMemoryPatch v1",
-            },
-            personal_context: PersonalContextPack {
-                schema_version: "1.0".to_string(),
-                profile: PersonalProfile::default(),
-                high_priority_memories: vec![],
-                relevant_memories: vec![],
-                recent_memories: vec![],
-                query_relevant_memories: vec![],
-                overview: PersonalMemoryOverview {
-                    total_items: 0,
-                    active_items: 0,
-                    pending_items: 0,
-                    rejected_items: 0,
-                    top_items: vec![],
-                },
-                mode: "tarot".to_string(),
-                date: "2026-06-13".to_string(),
             },
             evidence_index: vec![],
             period_data: InsightPeriodData {
@@ -1455,7 +1469,7 @@ mod tests {
             generated_at: "2026-06-13 12:00:00".to_string(),
         };
 
-        let json = serialize_insight_context(&payload).expect("serialize");
+        let json = serialize_user_context(&payload).expect("serialize");
         assert!(
             json.starts_with("{\"schema_version\":\"1.0\",\"constraints\":"),
             "unexpected prefix: {}",
@@ -1465,7 +1479,6 @@ mod tests {
         let ordered_fields = [
             "schema_version",
             "constraints",
-            "personal_context",
             "evidence_index",
             "period_data",
             "start_date",
@@ -1489,13 +1502,41 @@ mod tests {
         }
 
         let generated_at_pos = json.find("\"generated_at\"").expect("generated_at");
-        let personal_context_pos = json
-            .find("\"personal_context\"")
-            .expect("personal_context");
         let period_data_pos = json.find("\"period_data\"").expect("period_data");
-        assert!(generated_at_pos > personal_context_pos);
         assert!(generated_at_pos > period_data_pos);
         assert!(json.ends_with("\"generated_at\":\"2026-06-13 12:00:00\"}"));
+        assert!(!json.contains("\"personal_context\""));
+    }
+
+    #[test]
+    fn user_message_excludes_personal_context() {
+        let payload = UserContextPayload {
+            schema_version: "1.0",
+            constraints: InsightConstraints {
+                must_cite_evidence_ids: true,
+                no_evidence_policy: "write insufficient_evidence instead of guessing",
+                memory_patch_schema: "PersonalMemoryPatch v1",
+            },
+            evidence_index: vec![],
+            period_data: InsightPeriodData {
+                records: vec![],
+                ledger: vec![],
+                journals: vec![],
+                bond_entries: vec![],
+                plans: vec![],
+                previous_insight_reports: vec![],
+            },
+            start_date: "2026-06-13".to_string(),
+            end_date: "2026-06-13".to_string(),
+            report_kind: "report",
+            period_type: "day",
+            generated_at: "2026-06-13 18:00:00".to_string(),
+        };
+
+        let json = serialize_user_context(&payload).expect("serialize");
+        assert!(!json.contains("\"profile\""));
+        assert!(!json.contains("\"high_priority_memories\""));
+        assert!(!json.contains("\"personal_context\""));
     }
 
     #[test]
@@ -1518,17 +1559,226 @@ mod tests {
         .expect("profile");
 
         let range = resolve_period_range("day", "2026-06-13").expect("range");
-        let first = build_insight_context(&conn, "tarot", "day", &range).expect("first");
-        let second = build_insight_context(&conn, "tarot", "day", &range).expect("second");
+        let (_, first_user) =
+            build_insight_context(&conn, "tarot", "day", &range, "2026-06-13").expect("first");
+        let (_, second_user) =
+            build_insight_context(&conn, "tarot", "day", &range, "2026-06-13").expect("second");
 
         assert_eq!(
-            cache_stable_prefix(&first),
-            cache_stable_prefix(&second),
+            cache_stable_prefix(&first_user),
+            cache_stable_prefix(&second_user),
             "prefix before generated_at must be byte-identical across rebuilds"
         );
         assert!(
-            first.contains("\"generated_at\"") && second.contains("\"generated_at\""),
+            first_user.contains("\"generated_at\"") && second_user.contains("\"generated_at\""),
             "generated_at must remain the final cache-volatile field"
+        );
+    }
+
+    #[test]
+    fn system_prompt_stable_across_task_types() {
+        use crate::db::repositories::personal_memory_repo;
+        use crate::models::personal_memory::PersonalProfile;
+
+        let conn = Connection::open_in_memory().expect("db");
+        run_migrations(&conn).expect("migrations");
+        personal_memory_repo::save_personal_profile(
+            &conn,
+            &PersonalProfile {
+                birthday: "2000-01-01".to_string(),
+                personality: "steady".to_string(),
+                experiences: "cross-task cache".to_string(),
+                personal_notes: "same digest".to_string(),
+                updated_at: None,
+            },
+        )
+        .expect("profile");
+
+        let range = resolve_period_range("day", "2026-06-13").expect("range");
+        let (tarot_system, _) =
+            build_insight_context(&conn, "tarot", "day", &range, "2026-06-13").expect("tarot");
+        let (report_system, _) =
+            build_insight_context(&conn, "report", "day", &range, "2026-06-13").expect("report");
+
+        assert_eq!(
+            tarot_system, report_system,
+            "frozen daily digest must produce identical system prompts across task types"
+        );
+    }
+
+    #[test]
+    fn digest_frozen_within_day() {
+        use crate::db::repositories::personal_memory_repo;
+        use crate::models::personal_memory::PersonalProfile;
+
+        let conn = Connection::open_in_memory().expect("db");
+        run_migrations(&conn).expect("migrations");
+        personal_memory_repo::save_personal_profile(
+            &conn,
+            &PersonalProfile {
+                birthday: "2000-01-01".to_string(),
+                personality: "steady".to_string(),
+                experiences: "digest freeze".to_string(),
+                personal_notes: "".to_string(),
+                updated_at: None,
+            },
+        )
+        .expect("profile");
+
+        let first = personal_memory_repo::get_or_create_daily_digest(&conn, "2026-06-17")
+            .expect("first digest");
+        let first_json = serde_json::to_string(&first).expect("serialize first");
+
+        conn.execute(
+            "INSERT INTO personal_memory_items (
+                memory_type, title, summary, detail, tags_json,
+                importance, confidence, first_seen_date, last_seen_date,
+                status, created_by
+             ) VALUES ('habit', 'new habit', 'added after freeze', '', '[]', 80, 0.9, '2026-06-17', '2026-06-17', 'active', 'test')",
+            [],
+        )
+        .expect("insert memory");
+
+        let second = personal_memory_repo::get_or_create_daily_digest(&conn, "2026-06-17")
+            .expect("second digest");
+        let second_json = serde_json::to_string(&second).expect("serialize second");
+
+        assert_eq!(
+            first_json, second_json,
+            "digest must stay frozen for the rest of the day even after memory writes"
+        );
+    }
+
+    #[test]
+    fn digest_rebuilt_next_day() {
+        use crate::db::repositories::personal_memory_repo;
+        use crate::models::personal_memory::PersonalProfile;
+
+        let mut conn = Connection::open_in_memory().expect("db");
+        run_migrations(&conn).expect("migrations");
+        personal_memory_repo::save_personal_profile(
+            &conn,
+            &PersonalProfile {
+                birthday: "2000-01-01".to_string(),
+                personality: "steady".to_string(),
+                experiences: "next day rebuild".to_string(),
+                personal_notes: "".to_string(),
+                updated_at: None,
+            },
+        )
+        .expect("profile");
+
+        let day_one = personal_memory_repo::get_or_create_daily_digest(&conn, "2026-06-17")
+            .expect("day one digest");
+
+        let patch = json!({
+            "schema_version": "1.0",
+            "memory_operations": [{
+                "op": "create",
+                "memory_type": "habit",
+                "title": "Morning walk",
+                "summary": "Walk before breakfast",
+                "detail": "",
+                "tags": ["health"],
+                "importance": 75,
+                "confidence": 0.85,
+                "reason": "test patch",
+                "evidence_ids": ["record:1"],
+                "sources": [{
+                    "source_type": "record",
+                    "source_id": "1",
+                    "source_date": "2026-06-17",
+                    "evidence_id": "record:1",
+                    "excerpt": "Walk before breakfast"
+                }],
+                "first_seen_date": "2026-06-17",
+                "last_seen_date": "2026-06-17"
+            }]
+        });
+        personal_memory_repo::apply_memory_patch(
+            &mut conn,
+            &patch.to_string(),
+            "test-context",
+        )
+        .expect("apply patch");
+
+        let day_two = personal_memory_repo::get_or_create_daily_digest(&conn, "2026-06-18")
+            .expect("day two digest");
+
+        assert!(
+            !day_one
+                .high_priority_memories
+                .iter()
+                .any(|item| item.title == "Morning walk"),
+            "day-one frozen digest must not include later patches"
+        );
+        assert!(
+            day_two
+                .high_priority_memories
+                .iter()
+                .any(|item| item.title == "Morning walk"),
+            "rebuilt digest must include memory from prior-day patch"
+        );
+    }
+
+    #[test]
+    fn excludes_current_period_report_from_previous_reports() {
+        let conn = Connection::open_in_memory().expect("db");
+        run_migrations(&conn).expect("migrations");
+        let current_snapshot_id =
+            insert_context_snapshot(&conn, "tarot", "day", "2026-06-13", "2026-06-13", "{}")
+                .expect("current snapshot");
+        let previous_snapshot_id =
+            insert_context_snapshot(&conn, "tarot", "day", "2026-06-12", "2026-06-12", "{}")
+                .expect("previous snapshot");
+        let current_report_id = insert_test_report_for(
+            &conn,
+            current_snapshot_id,
+            "tarot",
+            "day",
+            "2026-06-13",
+            "2026-06-13",
+            "same-day tarot",
+        );
+        let previous_report_id = insert_test_report_for(
+            &conn,
+            previous_snapshot_id,
+            "tarot",
+            "day",
+            "2026-06-12",
+            "2026-06-12",
+            "older tarot",
+        );
+
+        let range = resolve_period_range("day", "2026-06-13").expect("range");
+        let (_, user_json) =
+            build_insight_context(&conn, "tarot", "day", &range, "2026-06-13").expect("context");
+        let context: Value = serde_json::from_str(&user_json).expect("json");
+        let previous_reports = context["period_data"]["previous_insight_reports"]
+            .as_array()
+            .expect("previous reports");
+        let evidence_index = context["evidence_index"]
+            .as_array()
+            .expect("evidence index");
+
+        assert!(
+            previous_reports
+                .iter()
+                .all(|report| report["id"].as_i64() != Some(current_report_id)),
+            "current same-kind period report must not enter the cache-sensitive prefix"
+        );
+        assert!(
+            previous_reports
+                .iter()
+                .any(|report| report["id"].as_i64() == Some(previous_report_id)),
+            "older reports should remain available as history"
+        );
+        assert!(
+            evidence_index.iter().all(|evidence| {
+                evidence["evidence_id"].as_str()
+                    != Some(&format!("insight_report:{current_report_id}"))
+            }),
+            "excluded current report must not enter evidence_index either"
         );
     }
 
@@ -1569,13 +1819,33 @@ mod tests {
     }
 
     fn insert_test_report(conn: &Connection, snapshot_id: i64, title: &str) -> i64 {
+        insert_test_report_for(
+            conn,
+            snapshot_id,
+            "report",
+            "day",
+            "2026-06-13",
+            "2026-06-13",
+            title,
+        )
+    }
+
+    fn insert_test_report_for(
+        conn: &Connection,
+        snapshot_id: i64,
+        report_kind: &str,
+        period_type: &str,
+        start_date: &str,
+        end_date: &str,
+        title: &str,
+    ) -> i64 {
         insert_report(
             conn,
             NewInsightReport {
-                report_kind: "report",
-                period_type: "day",
-                start_date: "2026-06-13",
-                end_date: "2026-06-13",
+                report_kind,
+                period_type,
+                start_date,
+                end_date,
                 title,
                 summary: "",
                 content_json: &json!({ "report": {} }),
@@ -1591,7 +1861,3 @@ mod tests {
         .expect("report")
     }
 }
-
-
-
-

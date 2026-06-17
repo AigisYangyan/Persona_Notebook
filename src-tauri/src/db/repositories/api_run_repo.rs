@@ -139,7 +139,12 @@ mod tests {
         )
         .expect("create api run");
 
-        let (status, task_kind, model_tier, finish_reason): (String, String, String, Option<String>) = conn
+        let (status, task_kind, model_tier, finish_reason): (
+            String,
+            String,
+            String,
+            Option<String>,
+        ) = conn
             .query_row(
                 "SELECT status, task_kind, model_tier, finish_reason FROM api_runs WHERE id = ?1",
                 params![id],

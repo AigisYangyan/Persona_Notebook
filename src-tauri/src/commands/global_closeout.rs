@@ -249,10 +249,11 @@ async fn run_score_step(state: &State<'_, DbState>, date: &str) -> CloseoutStepD
             Err(error) => return error_step(error),
         };
 
-        let request_json = match build_daily_analysis_request_json(&conn, date, &records, &rule_preview) {
-            Ok(value) => value,
-            Err(error) => return error_step(error),
-        };
+        let request_json =
+            match build_daily_analysis_request_json(&conn, date, &records, &rule_preview) {
+                Ok(value) => value,
+                Err(error) => return error_step(error),
+            };
 
         (records, rule_preview, request_json)
     };
@@ -363,7 +364,9 @@ async fn run_plan_step(
     date: &str,
     period_type: &str,
 ) -> CloseoutStepDto {
-    match plan::refresh_plan_progress(state.clone(), period_type.to_string(), date.to_string()).await {
+    match plan::refresh_plan_progress(state.clone(), period_type.to_string(), date.to_string())
+        .await
+    {
         Ok(outcome) if outcome.requires_clarification => CloseoutStepDto {
             status: "needs_clarification".into(),
             message: format!("{period_type} plan needs clarification before it can be applied"),

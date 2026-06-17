@@ -166,7 +166,7 @@ Proposal shape:
   }
 }"#;
 
-const DAILY_INSIGHT_SYSTEM_PROMPT: &str = r#"You are the personal insight engine for Personal Growth RPG Notebook.
+pub(crate) const DAILY_INSIGHT_SYSTEM_PROMPT: &str = r#"You are the personal insight engine for Personal Growth RPG Notebook.
 You may only use the provided JSON context. Do not invent facts, events, emotions, relationships, or progress not supported by evidence.
 Return valid JSON only. Do not include markdown, code fences, commentary, or extra text.
 
@@ -258,24 +258,28 @@ pub fn get_recent_api_runs(
     limit: Option<i64>,
 ) -> Result<Vec<ApiRunDiagnosticDto>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let records = api_run_repo::list_recent_runs(&conn, limit.unwrap_or(12)).map_err(|e| e.to_string())?;
-    Ok(records.into_iter().map(|record| ApiRunDiagnosticDto {
-        id: record.id,
-        date: record.date,
-        status: record.status,
-        error_message: record.error_message,
-        latency_ms: record.latency_ms,
-        engine_name: record.engine_name,
-        task_kind: record.task_kind,
-        model_tier: record.model_tier,
-        fallback_used: record.fallback_used,
-        prompt_tokens: record.prompt_tokens,
-        completion_tokens: record.completion_tokens,
-        prompt_cache_hit_tokens: record.prompt_cache_hit_tokens,
-        prompt_cache_miss_tokens: record.prompt_cache_miss_tokens,
-        finish_reason: record.finish_reason,
-        created_at: record.created_at,
-    }).collect())
+    let records =
+        api_run_repo::list_recent_runs(&conn, limit.unwrap_or(12)).map_err(|e| e.to_string())?;
+    Ok(records
+        .into_iter()
+        .map(|record| ApiRunDiagnosticDto {
+            id: record.id,
+            date: record.date,
+            status: record.status,
+            error_message: record.error_message,
+            latency_ms: record.latency_ms,
+            engine_name: record.engine_name,
+            task_kind: record.task_kind,
+            model_tier: record.model_tier,
+            fallback_used: record.fallback_used,
+            prompt_tokens: record.prompt_tokens,
+            completion_tokens: record.completion_tokens,
+            prompt_cache_hit_tokens: record.prompt_cache_hit_tokens,
+            prompt_cache_miss_tokens: record.prompt_cache_miss_tokens,
+            finish_reason: record.finish_reason,
+            created_at: record.created_at,
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -364,6 +368,7 @@ pub async fn execute_plan_api_request(
 
 pub async fn execute_daily_insight_api_request(
     state: &State<'_, DbState>,
+    system_prompt: String,
     request_json: String,
     task_kind: AiTaskKind,
 ) -> Result<String, String> {
@@ -373,7 +378,7 @@ pub async fn execute_daily_insight_api_request(
         let result = execute_api_request(
             state,
             request_json.clone(),
-            DAILY_INSIGHT_SYSTEM_PROMPT,
+            &system_prompt,
             task_kind,
             ApiRequestOptions {
                 max_tokens,
@@ -392,7 +397,8 @@ pub async fn execute_daily_insight_api_request(
             }
         }
     }
-    Err(last_error.unwrap_or_else(|| "daily insight api failed without a detailed error".to_string()))
+    Err(last_error
+        .unwrap_or_else(|| "daily insight api failed without a detailed error".to_string()))
 }
 
 async fn execute_api_request(
@@ -764,7 +770,9 @@ mod tests {
         assert!(should_retry_scoring_error(
             "Model output was truncated (finish_reason=length)"
         ));
-        assert!(should_retry_scoring_error("EOF while parsing a value at line 1 column 0"));
+        assert!(should_retry_scoring_error(
+            "EOF while parsing a value at line 1 column 0"
+        ));
         assert!(!should_retry_scoring_error("rate limit exceeded"));
     }
 

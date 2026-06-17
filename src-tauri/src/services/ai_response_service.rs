@@ -87,7 +87,10 @@ pub fn extract_chat_response(response_text: &str) -> Result<ChatResponseContent,
         .and_then(Value::as_str)
         .map(str::to_string);
 
-    if finish_reason.as_deref().is_some_and(|reason| reason == "length") {
+    if finish_reason
+        .as_deref()
+        .is_some_and(|reason| reason == "length")
+    {
         return Err("Model output was truncated (finish_reason=length)".to_string());
     }
 
@@ -98,7 +101,8 @@ pub fn extract_chat_response(response_text: &str) -> Result<ChatResponseContent,
         .get("content")
         .ok_or_else(|| "API envelope missing message.content".to_string())?;
 
-    let content = extract_content_text(content).ok_or_else(|| "API returned empty content".to_string())?;
+    let content =
+        extract_content_text(content).ok_or_else(|| "API returned empty content".to_string())?;
     let usage = extract_usage_stats(&envelope);
 
     Ok(ChatResponseContent {
@@ -155,9 +159,7 @@ fn extract_usage_stats(envelope: &Value) -> UsageStats {
     UsageStats {
         prompt_tokens: usage.get("prompt_tokens").and_then(Value::as_i64),
         completion_tokens: usage.get("completion_tokens").and_then(Value::as_i64),
-        prompt_cache_hit_tokens: usage
-            .get("prompt_cache_hit_tokens")
-            .and_then(Value::as_i64),
+        prompt_cache_hit_tokens: usage.get("prompt_cache_hit_tokens").and_then(Value::as_i64),
         prompt_cache_miss_tokens: usage
             .get("prompt_cache_miss_tokens")
             .and_then(Value::as_i64),
